@@ -290,6 +290,7 @@ def test_open_folder_path_failed_auto_open_leaves_current_entry_none(tmp_path):
     stub.folder_root = os.path.join("other", "folder")
     stub.queue_entries = []
     stub.log_df = None
+    stub.log_path = None
     stub._save_current_queue_picks = lambda: None
     stub._populate_queue = lambda: None
     stub._show_queue = lambda: None
@@ -334,12 +335,13 @@ def test_open_folder_path_no_tests_found_shows_messagebox(tmp_path, monkeypatch)
     monkeypatch.setattr(ui.messagebox, "showinfo", lambda *a, **kw: info_calls.append((a, kw)))
     monkeypatch.setattr(
         store, "list_tests",
-        lambda path, progress=None: ([], pd.DataFrame(columns=store.LOG_COLUMNS)),
+        lambda path, progress=None, log_path=None: ([], pd.DataFrame(columns=store.LOG_COLUMNS)),
     )
 
     stub = types.SimpleNamespace()
     stub.current_entry = None
     stub.td = None
+    stub.log_path = None
     stub._make_scan_progress = lambda: (
         types.SimpleNamespace(grab_release=lambda: None, destroy=lambda: None),
         lambda text: None,
@@ -699,6 +701,9 @@ def _folder_controls_stub():
     stub.var_source = _Var()
     stub.cmb_source = _FakeCombo()
     stub.btn_skip_test = _FakeButton()
+    stub.log_path = None
+    stub.log_lbl = types.SimpleNamespace(config=lambda **kw: None)
+    stub._update_log_label = types.MethodType(DfitApp._update_log_label, stub)
     stub._update_skip_test_btn = types.MethodType(DfitApp._update_skip_test_btn, stub)
     stub._update_folder_controls = types.MethodType(DfitApp._update_folder_controls, stub)
     return stub
@@ -1046,6 +1051,8 @@ def _finish_stub(tmp_path, folder_mode, monkeypatch, second_status="new"):
         stub.folder_root = None
         stub.log_df = None
 
+    stub.log_path = None
+    stub._log_target = types.MethodType(DfitApp._log_target, stub)
     stub._write_log_row = types.MethodType(DfitApp._write_log_row, stub)
     stub._advance_queue = types.MethodType(DfitApp._advance_queue, stub)
     stub._overview_scale_key = types.MethodType(DfitApp._overview_scale_key, stub)
@@ -1097,6 +1104,76 @@ def test_finish_single_file_branch_writes_stem_json_no_log(tmp_path, monkeypatch
 
     assert (data_dir / "w1_picks.json").exists()
     assert not (data_dir / store.LOG_FILENAME).exists()
+
+
+def test_finish_folder_branch_with_custom_log_writes_there_only(tmp_path, monkeypatch):
+    stub, entry, data_dir, entry2 = _finish_stub(tmp_path, folder_mode=True, monkeypatch=monkeypatch)
+    custom = str(tmp_path / "elsewhere.csv")
+    store.create_log_file(custom)
+    stub.log_path = custom
+
+    stub._finish()
+
+    assert not (tmp_path / store.LOG_FILENAME).exists()
+    assert store.load_log_file(custom)["test_id"].tolist() == ["w1"]
+
+
+def test_finish_single_file_with_custom_log_writes_folder_equivalent_row(tmp_path, monkeypatch):
+    # Layout: <tmp>/pad/w1/w1.csv -- the file's grandparent (pad) acts as the opened root, so
+    # the row's test_id is "w1" (single-stem folder) and `file` is relative to pad.
+    pad = tmp_path / "pad"
+    pad.mkdir()
+    stub, entry, data_dir, entry2 = _finish_stub(
+        pad, folder_mode=False, monkeypatch=monkeypatch)
+    well = pad / "w1"
+    well.mkdir()
+    (well / "w1.csv").write_text("t,p\n")
+    stub.td.path = str(well / "w1.csv")
+    stub.state.active_source = "csv"
+    custom = str(tmp_path / "log.csv")
+    stub.log_path = custom
+
+    stub._finish()
+    stub._finish()  # a redo replaces the row, never duplicates it
+
+    df = store.load_log_file(custom)
+    assert df["test_id"].tolist() == ["w1"]
+    assert df.loc[0, "file"].replace(os.sep, "/") == "w1/w1.csv"
+    assert not (well / store.LOG_FILENAME).exists()
+    assert (well / "w1_picks.json").exists()
+
+
+def test_finish_refuses_custom_log_that_gained_foreign_columns(tmp_path, monkeypatch):
+    # A saved log_path is re-checked at write time: a column added in Excel since it was chosen
+    # would be dropped by the next save, so the row is not written and the file is untouched.
+    stub, entry, data_dir, entry2 = _finish_stub(tmp_path, folder_mode=True, monkeypatch=monkeypatch)
+    custom = tmp_path / "shared.csv"
+    custom.write_text("file,test_id,well_name,my_notes\nx.csv,other,Other,keep me\n")
+    stub.log_path = str(custom)
+    errors = []
+    monkeypatch.setattr(ui.messagebox, "showerror", lambda *a, **kw: errors.append(a))
+    before = custom.read_text()
+
+    stub._finish()
+
+    assert errors and "my_notes" in errors[0][1]
+    assert custom.read_text() == before
+
+
+def test_log_target_resolution(tmp_path):
+    stub = types.SimpleNamespace(log_path=None, folder_root=None, current_entry=None)
+    stub._log_target = types.MethodType(DfitApp._log_target, stub)
+    assert stub._log_target() is None
+
+    stub.current_entry = object()
+    stub.folder_root = str(tmp_path)
+    assert stub._log_target() == os.path.join(str(tmp_path), store.LOG_FILENAME)
+
+    stub.log_path = str(tmp_path / "x.csv")
+    assert stub._log_target() == str(tmp_path / "x.csv")
+
+    stub.current_entry = None
+    assert stub._log_target() == str(tmp_path / "x.csv")
 
 
 def test_finish_preserves_skip_on_last_step(tmp_path, monkeypatch):
@@ -1282,6 +1359,8 @@ def _skip_test_real_refresh_stub(tmp_path):
     stub._update_skip_test_btn = lambda: None
     stub._load_test_calls = []
     stub._load_test = lambda e: stub._load_test_calls.append(e)
+    stub.log_path = None
+    stub._log_target = types.MethodType(DfitApp._log_target, stub)
     stub._write_log_row = types.MethodType(DfitApp._write_log_row, stub)
     stub._advance_queue = types.MethodType(DfitApp._advance_queue, stub)
     stub._skip_test = types.MethodType(DfitApp._skip_test, stub)

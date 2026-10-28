@@ -25,8 +25,8 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from . import APP_NAME
-from . import (colors as C, guide_content, interpret, io_load, picks, plots, sliders, store,
-               summary)
+from . import (colors as C, guide_content, interpret, io_load, picks, plots, settings, sliders,
+               store, summary)
 from .model import (FALLBACK_DENSITY_PPG, NO_CONTACT_SCENARIOS, STEPS, PickState, TangentPick, blocking_issues,
                     compute_all,
                     infer_step_status, last_step, loglog_window_suppressed, next_step,
@@ -275,6 +275,9 @@ class DfitApp:
         self.folder_root: str | None = None
         self.queue_entries: list[store.TestEntry] = []
         self.log_df = None
+        # Results log target, global across modes and folders: an absolute CSV path, or None for
+        # the per-folder <root>/dfit_log.csv default. Persisted in settings.json.
+        self.log_path: Optional[str] = settings.load_settings().get("log_path") or None
 
         # Closing the window must not lose the current folder-mode test's unsaved picks.
         self.root.protocol("WM_DELETE_WINDOW", self._on_root_close)
@@ -307,6 +310,18 @@ class DfitApp:
                                        state="disabled")
         self.cmb_source.pack(side="left")
         self.cmb_source.bind("<<ComboboxSelected>>", lambda e: self._on_source_change())
+
+        # Where Finish/Skip-test write the results row (see _log_target). Always enabled.
+        self.mb_log = ttk.Menubutton(top, text="Log output")
+        log_menu = tk.Menu(self.mb_log, tearoff=False)
+        log_menu.add_command(label="Append to existing CSV…", command=self._choose_log_existing)
+        log_menu.add_command(label="New log CSV…", command=self._choose_log_new)
+        log_menu.add_command(label="Use per-folder dfit_log.csv", command=self._use_folder_log)
+        self.mb_log["menu"] = log_menu
+        self.mb_log.pack(side="left", padx=(12, 4))
+        self.log_lbl = ttk.Label(top, text="")
+        self.log_lbl.pack(side="left")
+        self._update_log_label()
 
         # Held on self: Tk GCs an unreferenced PhotoImage and the label goes blank.
         try:
@@ -842,7 +857,8 @@ class DfitApp:
             def _on_scan_progress(dirs_scanned: int, tests_found: int):
                 set_progress_text(f"Scanning folder…  {tests_found} test(s) found")
 
-            entries, log_df = store.list_tests(path, progress=_on_scan_progress)
+            entries, log_df = store.list_tests(path, progress=_on_scan_progress,
+                                               log_path=self.log_path)
             if entries:
                 self._save_current_queue_picks()  # never lose the outgoing test's work
                 self.folder_root = path
@@ -878,10 +894,11 @@ class DfitApp:
         orphan_ids = [tid for tid in log_df["test_id"].tolist() if tid not in entry_ids]
         parts = []
         if log_df.attrs.get("read_error"):
-            parts.append(f"{store.LOG_FILENAME} is unreadable and will not be written")
+            parts.append(f"{os.path.basename(self.log_path or store.LOG_FILENAME)} "
+                         "is unreadable and will not be written")
         if warn_count:
             parts.append(f"{warn_count} scan warning(s) -- see individual test folders")
-        if orphan_ids:
+        if orphan_ids and not self.log_path:  # a shared custom log holds other roots' rows
             parts.append(f"{len(orphan_ids)} orphaned log row(s) with no matching test")
         if parts:
             self.warn_lbl.config(text="\n".join(parts))
@@ -983,6 +1000,80 @@ class DfitApp:
         self._refresh_queue_row(entry)
         self._update_folder_controls()
 
+    def _log_target(self) -> Optional[str]:
+        """The CSV Finish/Skip-test write to: the chosen `log_path`, else `<folder_root>/
+        dfit_log.csv` in folder mode, else None (single-file mode with the default writes no log)."""
+        if self.log_path:
+            return self.log_path
+        if self.current_entry is not None and self.folder_root:
+            return os.path.join(self.folder_root, store.LOG_FILENAME)
+        return None
+
+    def _update_log_label(self):
+        """Sync the top-bar "Log: ..." label with `log_path` and the current mode."""
+        if self.log_path:
+            text = f"Log: {os.path.basename(self.log_path)}"
+        elif self.current_entry is not None:
+            text = f"Log: {store.LOG_FILENAME} (per folder)"
+        else:
+            text = "Log: none"
+        self.log_lbl.config(text=text)
+
+    def _set_log_path(self, path: Optional[str]):
+        """Adopt `path` as the global log target, persist it, and refresh the label. The setting
+        is saved read-modify-write so unknown keys survive."""
+        self.log_path = path
+        try:
+            data = settings.load_settings()
+            data["log_path"] = path
+            settings.save_settings(data)
+        except Exception as e:
+            messagebox.showwarning("Settings", f"Log choice not remembered: {e}")
+        self._update_log_label()
+
+    def _choose_log_existing(self):
+        path = filedialog.askopenfilename(
+            title="Append to existing log CSV",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
+        if not path:
+            return
+        path = os.path.abspath(path)
+        problem = store.check_log_file(path)
+        if problem:
+            messagebox.showerror("Log output", f"{problem}\nThe previous log target is kept.")
+            return
+        self._set_log_path(path)
+
+    def _choose_log_new(self):
+        path = filedialog.asksaveasfilename(
+            title="New log CSV", defaultextension=".csv", initialfile=store.LOG_FILENAME,
+            filetypes=[("CSV files", "*.csv")])
+        if not path:
+            return
+        path = os.path.abspath(path)
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            # Never erase an existing log; the Save As "replace?" prompt is easy to accept.
+            if not messagebox.askyesno(
+                    "Log output",
+                    f"{os.path.basename(path)} already has data. Append to it instead?\n"
+                    "(No cancels. The file is never erased.)"):
+                return
+            problem = store.check_log_file(path)
+            if problem:
+                messagebox.showerror("Log output", f"{problem}\nThe previous log target is kept.")
+                return
+            self._set_log_path(path)
+            return
+        try:
+            store.create_log_file(path)
+        except Exception as e:
+            messagebox.showerror("Log output", f"Could not create {path}: {e}")
+            return
+        self._set_log_path(path)
+
+    def _use_folder_log(self):
+        self._set_log_path(None)
+
     def _update_folder_controls(self):
         """One sync point for the Source combobox and the Skip-test button -- called from
         _load_test (after current_entry is set), the single-file _load wrapper (after clearing
@@ -993,6 +1084,7 @@ class DfitApp:
         disabled via _update_skip_test_btn. Folder mode: cmb_source lists the entry's available
         sources (readonly only if there's more than one -- a single-source test has nothing to
         switch to), and Skip-test is enabled with its label synced to explicit_status."""
+        self._update_log_label()
         if self.current_entry is None:
             self.var_source.set("")
             self.cmb_source["values"] = []
@@ -1091,17 +1183,33 @@ class DfitApp:
             active_source=old.active_source,
         )
 
-    def _write_log_row(self, entry: store.TestEntry):
-        """Build and upsert one dfit_log.csv row for `entry` from the current state/res, then
-        persist the whole log -- shared by _finish's and _skip_test's folder branches, the only
-        two places dfit_log.csv is written. Callers wrap this in try/except (OneDrive file
-        locks happen); the picks JSON save must already have succeeded independently before
-        this runs."""
-        row = store.build_log_row(entry, entry.data_path(self.state.active_source.upper()),
-                                  self.folder_root, self.state, self.td, self.res)
+    def _write_log_row(self, entry: store.TestEntry, root: Optional[str],
+                       active_path: Optional[str] = None):
+        """Build and upsert one results row for `entry` from the current state/res into the log
+        target (`_log_target`), then persist the whole log -- shared by _finish's two branches
+        and _skip_test's folder branch, the only places the log is written. `root` is what the
+        row's `file` column is relative to (the opened folder, or a single file's grandparent);
+        `active_path` overrides the data file recorded (single-file mode, where the opened file
+        need not match the entry's source).
+        Returns without writing when there is no target. Callers wrap this in try/except
+        (OneDrive file locks happen); the picks JSON save must already have succeeded
+        independently before this runs."""
+        target = self._log_target()
+        if target is None:
+            return
+        if self.log_path:
+            # Re-check a saved choice: the file may have gained columns (Excel) since it was picked.
+            problem = store.check_log_file(target)
+            if problem:
+                messagebox.showerror("Log not written",
+                                     f"{problem}\nThe log was NOT written; the picks were saved.")
+                return
+        if active_path is None:
+            active_path = entry.data_path(self.state.active_source.upper())
+        row = store.build_log_row(entry, active_path, root, self.state, self.td, self.res)
         try:
             # Re-read from disk so an unreadable log is never replaced by an empty frame.
-            log_df = store.load_log(self.folder_root)
+            log_df = store.load_log_file(target)
         except store.LogReadError as e:
             messagebox.showerror(
                 "Log not written",
@@ -1109,7 +1217,7 @@ class DfitApp:
                 "The log was NOT written; the picks were saved.")
             return
         self.log_df = store.upsert_log_row(log_df, row)
-        store.save_log(self.folder_root, self.log_df)
+        store.save_log_file(target, self.log_df)
 
     def _advance_queue(self):
         """Advance to the next "new"-status queue entry (scanning circularly from just after
@@ -1163,7 +1271,7 @@ class DfitApp:
             return
         entry.status = store.status_for(self.state)
         try:
-            self._write_log_row(entry)
+            self._write_log_row(entry, self.folder_root)
         except Exception as e:
             messagebox.showerror("Log write failed", str(e))
         self._refresh_queue_row(entry)
@@ -2849,7 +2957,7 @@ class DfitApp:
 
         Single-file mode (current_entry is None): byte-for-byte today's behavior -- re-save the
         picks JSON next to the data file and write a PNG per step (default zoom on Overview and Injection, current zoom elsewhere) into a sibling
-        subfolder; no log, no advance. Folder mode: save picks via store.save_picks_for (the
+        subfolder; no advance, and a log row only when a custom log is chosen (`log_path`). Folder mode: save picks via store.save_picks_for (the
         store path is the single ground truth in folder mode -- no <stem>_picks.json
         duplicate), same PNG export, the dfit_log.csv row write, then _advance_queue() to the
         next "new" test.
@@ -2893,10 +3001,19 @@ class DfitApp:
             messagebox.showerror("Finish failed", str(e))
             return
         if entry is None:
+            if self.log_path:
+                # Single-file mode logs only to a chosen CSV, under the test_id a folder scan
+                # of the file's grandparent would give it.
+                try:
+                    file_entry, file_root = store.single_file_entry(self.td.path,
+                                                                         exclude=self.log_path)
+                    self._write_log_row(file_entry, file_root, self.td.path)
+                except Exception as e:
+                    messagebox.showerror("Log write failed", str(e))
             return
         entry.status = store.status_for(self.state)
         try:
-            self._write_log_row(entry)
+            self._write_log_row(entry, self.folder_root)
         except Exception as e:
             messagebox.showerror("Log write failed", str(e))
         self._refresh_queue_row(entry)

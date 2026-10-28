@@ -15,7 +15,8 @@ pure function, `model.compute_all`.
 
 Two modes. Single-file mode opens one file directly. Folder mode ("Open Folder…") scans a root
 into a queue of tests shown in a left sidebar and rolls each test's results into a per-root
-`dfit_log.csv`. There is no other cross-test aggregation. Permeability is out of scope.
+`dfit_log.csv`, or into one chosen CSV shared by both modes ("Log target" below). There is no
+other cross-test aggregation. Permeability is out of scope.
 
 The eight steps (`model.STEPS`): overview → injection → isip → gfunction → tangent → loglog →
 porepressure → stiffness.
@@ -58,7 +59,7 @@ matplotlib 3.11.1, scipy 1.18.0 (pinned but not imported anywhere), openpyxl 3.1
 
 The package `dfit_tool/` is layered. Lower layers never import higher ones.
 
-    app → ui → {io_load, picks, plots, sliders, model, interpret, questionnaire, store}
+    app → ui → {io_load, picks, plots, sliders, model, interpret, questionnaire, store, settings}
     picks, plots → model, io_load, interpret
     model → interpret, resample, io_load
     resample → gfunction
@@ -156,6 +157,19 @@ non-data `.xlsx` files; it never raises.
   keep deeper-folder-wins. Verified across all 3269 corpus ids.
 - Sources: `TestEntry.available_sources` in order CSV, DBS, XLSX. Switching source resets picks
   after a confirm (`ui._on_source_change`).
+- Log target: a global setting (`settings.py`, stdlib only, `%APPDATA%\DFIT Tool\settings.json`, key
+  `log_path`), shared by both modes and every folder. Default (unset) is `<root>/dfit_log.csv`. The top-bar
+  "Log output" menu picks an existing CSV, creates a new one, or restores the per-folder default
+  (`ui._log_target`). Rows are still upserted by `test_id`, so the same id from two roots overwrites.
+  `store.check_log_file` refuses a non-empty CSV that is unreadable, lacks `test_id`, or has columns outside
+  `LOG_COLUMNS` (`load_log_file` would drop them on the next save), both when it is chosen and again
+  before every write (`ui._write_log_row`). `create_log_file` never overwrites a non-empty file; "New log
+  CSV…" on an existing log offers to append instead. `scan_root(exclude=)`, `list_tests(log_path=)`, and
+  `single_file_entry(exclude=)` keep a custom log from becoming a test or changing a test_id. Single-file
+  Finish writes a row only when a custom log is set, with the test_id a folder scan of the file's
+  grandparent would give (`store.single_file_entry`); a folder opened higher up gives a different id.
+  Known gap: switching to a CSV inside the open root does not drop it from the queue until the
+  folder is reopened.
 - Picks persist to `<folder>/<test_id>.dfit_picks.json`, written atomically (temp +
   `os.replace`). In single-file mode, picks save/load through a file dialog instead.
   `DerivedResults` is never serialized. `model._decode` migrates legacy saves and drops unknown
@@ -180,7 +194,8 @@ non-data `.xlsx` files; it never raises.
   test (`ui._advance_queue`). Finish clears `explicit_status` but keeps a per-step `"skipped"`
   set by "Skip >" on the step it runs from, so such a test still reads `"skipped"`. Skip test
   sets `explicit_status = "skipped"`, saves, logs, and advances; Unskip clears it, saves, logs,
-  and stays put. Single-file Finish re-saves `<stem>_picks.json`, no log write.
+  and stays put. Single-file Finish re-saves `<stem>_picks.json` and writes a log row only when
+  a custom log target is set (see "Log target").
 - `scripts/triage` builds on `store.scan_root`. A non-keeper `.xlsx` is never quarantined, and
   the decision fingerprint (`ledger.group_files_sig` over `features.sig_files_for`) uses csv/dbs
   files only unless an xlsx is itself a keeper.

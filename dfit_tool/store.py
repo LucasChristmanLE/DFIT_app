@@ -199,10 +199,12 @@ def _sniff_xlsx_cached(path: str) -> bool:
     return hit
 
 
-def _group_data_files(filenames: list[str], dirpath: str) -> dict[str, dict[str, str]]:
+def _group_data_files(filenames: list[str], dirpath: str,
+                      exclude: Optional[str] = None) -> dict[str, dict[str, str]]:
     """Group one directory's filenames by stem: `{stem: {"csv": name, "dbs": name, "xlsx":
     name}}`. Files that are not `.csv`/`.dbs`/`.xlsx` (case-insensitive) are skipped, as is
-    `LOG_FILENAME` (case-insensitive, it is our own log, not a test).
+    `LOG_FILENAME` (case-insensitive, it is our own log, not a test) and the custom log path
+    `exclude` (an abspath, compared case-insensitively on Windows), when it lives in `dirpath`.
 
     An `.xlsx` file has three more gates before it counts as a data file at all: it must not be
     an Excel lock file (its name starts with `"~$"`, checked explicitly here -- NOT covered by
@@ -219,8 +221,11 @@ def _group_data_files(filenames: list[str], dirpath: str) -> dict[str, dict[str,
     Filenames within one directory are unique, so each (stem, ext) maps to exactly one name --
     no "pick first" ambiguity to warn about."""
     by_stem: dict[str, dict[str, str]] = {}
+    exclude_key = os.path.normcase(exclude) if exclude else None
     for name in filenames:
         if name.lower() == LOG_FILENAME.lower():
+            continue
+        if exclude_key and os.path.normcase(os.path.abspath(os.path.join(dirpath, name))) == exclude_key:
             continue
         low = name.lower()
         if low.endswith(".csv"):
@@ -242,7 +247,8 @@ def _group_data_files(filenames: list[str], dirpath: str) -> dict[str, dict[str,
     return by_stem
 
 
-def _entries_for_dir(root: str, dirpath: str, filenames: list[str]) -> list[TestEntry]:
+def _entries_for_dir(root: str, dirpath: str, filenames: list[str],
+                     exclude: Optional[str] = None) -> list[TestEntry]:
     """One TestEntry per stem group in `dirpath`, per the identity rules: loose files directly in
     `root` get `test_id = stem`; a non-root dir with a single stem group collapses to
     `test_id = rel`; a non-root dir with multiple stem groups gets `test_id = rel + "/" + stem`.
@@ -264,7 +270,7 @@ def _entries_for_dir(root: str, dirpath: str, filenames: list[str]) -> list[Test
     `rel` has no stem suffix at all, so it can't collide with one either); a cross-directory
     collision is a pre-existing, separately-handled case (`scan_root`'s deeper-folder-wins dedup).
     """
-    by_stem = _group_data_files(filenames, dirpath)
+    by_stem = _group_data_files(filenames, dirpath, exclude)
     if not by_stem:
         return []
     rel = os.path.relpath(dirpath, root).replace(os.sep, "/")
@@ -292,7 +298,7 @@ def _entries_for_dir(root: str, dirpath: str, filenames: list[str]) -> list[Test
     return entries
 
 
-def scan_root(root: str, progress=None) -> list[TestEntry]:
+def scan_root(root: str, progress=None, exclude: Optional[str] = None) -> list[TestEntry]:
     """Every candidate test anywhere under `root`, at any depth: one entry per stem group of data
     files in each walked directory (including `root` itself), keyed by a path-qualified test_id
     (see `_entries_for_dir`). Everything else (other extensions, dfit_log.csv, directories with no
@@ -304,6 +310,9 @@ def scan_root(root: str, progress=None) -> list[TestEntry]:
     called once per directory visited during the `os.walk` loop below, so a caller (the UI) can
     pump its event loop and show a running count during a slow scan. Not called during the
     dedup/sort/questionnaire-attach step that follows -- default None leaves behavior unchanged.
+
+    `exclude`, if given, is the abspath of a custom log CSV that must never become a test (see
+    `_group_data_files`); default None leaves behavior unchanged.
 
     A test_id collision (e.g. a loose `well1.csv` in a customer folder alongside a
     `well1/well1.csv` subfolder of the same name) is resolved in favor of the deeper folder --
@@ -317,7 +326,7 @@ def scan_root(root: str, progress=None) -> list[TestEntry]:
     dirs_scanned = 0
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if not d.endswith(" DFIT plots")]
-        entries.extend(_entries_for_dir(root, dirpath, filenames))
+        entries.extend(_entries_for_dir(root, dirpath, filenames, exclude))
         dirs_scanned += 1
         if progress is not None:
             progress(dirs_scanned, len(entries))
@@ -469,16 +478,15 @@ class LogReadError(Exception):
         self.cause = cause
 
 
-def load_log(root: str) -> pd.DataFrame:
-    """The master log at `<root>/dfit_log.csv`, or an empty DataFrame shaped like LOG_COLUMNS if
-    it is missing or 0 bytes. A non-empty file that cannot be read (encoding, parse, OS error)
-    raises `LogReadError`: returning an empty frame there would let the next upsert + save_log
-    overwrite the real log. An older log missing newer columns gets them appended (empty), with
-    existing row data preserved; the returned column order is always LOG_COLUMNS. `test_id` is
-    forced to a string dtype -- otherwise a purely numeric test_id (e.g. a folder named "7170")
+def load_log_file(path: str) -> pd.DataFrame:
+    """The master log at `path`, or an empty DataFrame shaped like LOG_COLUMNS if it is missing
+    or 0 bytes. A non-empty file that cannot be read (encoding, parse, OS error) raises
+    `LogReadError`: returning an empty frame there would let the next upsert + save overwrite
+    the real log. An older log missing newer columns gets them appended (empty), with existing
+    row data preserved; the returned column order is always LOG_COLUMNS. `test_id` is forced to
+    a string dtype -- otherwise a purely numeric test_id (e.g. a folder named "7170")
     round-trips as int64, and `upsert_log_row`'s string-keyed comparison never matches, silently
     appending a duplicate row on every save instead of updating."""
-    path = os.path.join(root, LOG_FILENAME)
     try:
         if not os.path.exists(path) or os.path.getsize(path) == 0:
             return pd.DataFrame(columns=LOG_COLUMNS)
@@ -491,10 +499,10 @@ def load_log(root: str) -> pd.DataFrame:
     return df[LOG_COLUMNS]
 
 
-def save_log(root: str, df: pd.DataFrame) -> None:
-    """Write `df` to `<root>/dfit_log.csv` atomically (temp file + os.replace)."""
-    path = os.path.join(root, LOG_FILENAME)
-    fd, tmp_path = tempfile.mkstemp(dir=root, prefix=".dfit_log_", suffix=".tmp")
+def save_log_file(path: str, df: pd.DataFrame) -> None:
+    """Write `df` to `path` atomically (temp file in the same directory + os.replace)."""
+    folder = os.path.dirname(path) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=folder, prefix=".dfit_log_", suffix=".tmp")
     os.close(fd)
     try:
         df.to_csv(tmp_path, index=False)
@@ -503,6 +511,69 @@ def save_log(root: str, df: pd.DataFrame) -> None:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
         raise
+
+
+def load_log(root: str) -> pd.DataFrame:
+    """`load_log_file` on the per-folder default, `<root>/dfit_log.csv`."""
+    return load_log_file(os.path.join(root, LOG_FILENAME))
+
+
+def save_log(root: str, df: pd.DataFrame) -> None:
+    """`save_log_file` on the per-folder default, `<root>/dfit_log.csv`."""
+    save_log_file(os.path.join(root, LOG_FILENAME), df)
+
+
+def check_log_file(path: str) -> Optional[str]:
+    """None when `path` can serve as the log target, else a short reason it cannot. A missing or
+    0-byte file is fine, as is an older log whose columns are a subset of LOG_COLUMNS (the rest
+    are appended on load). An existing non-empty CSV is refused when it cannot be read, has no
+    `test_id` column, or has any column outside LOG_COLUMNS: `load_log_file` reorders to
+    LOG_COLUMNS, so the next save would silently drop the foreign columns."""
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return None
+    try:
+        columns = list(pd.read_csv(path).columns)
+    except Exception as e:
+        return f"{os.path.basename(path)} could not be read: {e}"
+    if "test_id" not in columns:
+        return f"{os.path.basename(path)} has no test_id column"
+    foreign = [c for c in columns if c not in LOG_COLUMNS]
+    if foreign:
+        return (f"{os.path.basename(path)} has columns the log would drop: "
+                + ", ".join(foreign[:5]) + (" ..." if len(foreign) > 5 else ""))
+    return None
+
+
+def create_log_file(path: str) -> None:
+    """Write a header-only LOG_COLUMNS CSV at `path`. Raises FileExistsError if a non-empty file
+    is already there: a "new log" must never erase an existing one."""
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        raise FileExistsError(f"{path} already exists and is not empty")
+    save_log_file(path, pd.DataFrame(columns=LOG_COLUMNS))
+
+
+def single_file_entry(path: str, exclude: Optional[str] = None) -> tuple[TestEntry, str]:
+    """The folder-mode-equivalent `(entry, root)` for a single opened data file, so a
+    single-file Finish writes the same test_id a folder-mode scan of the file's grandparent
+    would. `root` (the grandparent) is also what `build_log_row` takes. Falls back to
+    `TestEntry(test_id=stem, folder=parent)` when no scanned entry holds `path` (e.g. the file
+    is gone or not a data extension). `exclude` is the custom log CSV, as in `scan_root`: a log
+    saved next to the data must not count as a second stem group and change the test_id."""
+    path = os.path.abspath(path)
+    parent = os.path.dirname(path)
+    root = os.path.dirname(parent)
+    try:
+        entries = _entries_for_dir(root, parent, os.listdir(parent),
+                                   os.path.abspath(exclude) if exclude else None)
+    except OSError:
+        entries = []
+    key = os.path.normcase(path)
+    for entry in entries:
+        for p in (entry.csv_path, entry.dbs_path, entry.xlsx_path):
+            if p and os.path.normcase(os.path.abspath(p)) == key:
+                return entry, root
+    stem = os.path.splitext(os.path.basename(path))[0]
+    return TestEntry(test_id=stem, folder=parent, picks_basename=stem), root
 
 
 def upsert_log_row(df: pd.DataFrame, row: dict) -> pd.DataFrame:
@@ -522,21 +593,24 @@ def upsert_log_row(df: pd.DataFrame, row: dict) -> pd.DataFrame:
     return pd.concat([df, new_row], ignore_index=True)
 
 
-def list_tests(root: str, progress=None) -> tuple[list[TestEntry], pd.DataFrame]:
+def list_tests(root: str, progress=None,
+               log_path: Optional[str] = None) -> tuple[list[TestEntry], pd.DataFrame]:
     """`scan_root(root, progress=progress)` with each entry's `status` recomputed from its picks
-    file, plus `load_log(root)`. Log rows whose test_id matches no scanned entry are kept as-is
+    file, plus the log (`log_path` when given, else `load_log(root)`). Log rows whose test_id matches no scanned entry are kept as-is
     -- the UI can detect these orphans by comparing the df's test_ids to the returned entries.
 
     `progress`, if given, is passed straight through to `scan_root` (see its docstring); default
-    None leaves behavior unchanged."""
-    entries = scan_root(root, progress=progress)
+    None leaves behavior unchanged. A custom `log_path` is also excluded from the scan so a log
+    saved inside the root never shows up as a test."""
+    entries = scan_root(root, progress=progress,
+                        exclude=os.path.abspath(log_path) if log_path else None)
     for entry in entries:
         try:
             entry.status = status_for(load_picks_for(entry))
         except Exception:
             entry.status = "new"  # one bad picks file must not abort the scan; file is untouched
     try:
-        log = load_log(root)
+        log = load_log_file(log_path) if log_path else load_log(root)
     except LogReadError as e:
         # The folder still opens; the unreadable log is flagged for the UI and never rewritten.
         log = pd.DataFrame(columns=LOG_COLUMNS)

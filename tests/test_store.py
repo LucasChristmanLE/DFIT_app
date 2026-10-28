@@ -875,3 +875,157 @@ def test_load_log_backfills_missing_near_wellbore_complexity(tmp_path):
     assert list(loaded.columns) == store.LOG_COLUMNS
     assert loaded.loc[0, "test_id"] == "well1"
     assert pd.isna(loaded.loc[0, "near_wellbore_complexity"])
+
+
+# --------------------------------------------------------------------------------------------------
+# Choosable log target: path-based load/save, check_log_file, create_log_file, single_file_entry,
+# scan_root(exclude=...), list_tests(log_path=...)
+# --------------------------------------------------------------------------------------------------
+def _one_row_df(test_id="well1"):
+    df = pd.DataFrame([{c: "" for c in store.LOG_COLUMNS}])
+    df.loc[0, "test_id"] = test_id
+    return df
+
+
+def test_save_and_load_log_file_arbitrary_path(tmp_path):
+    path = str(tmp_path / "custom_name.csv")
+
+    store.save_log_file(path, _one_row_df("w9"))
+    loaded = store.load_log_file(path)
+
+    assert list(loaded.columns) == store.LOG_COLUMNS
+    assert loaded.loc[0, "test_id"] == "w9"
+    assert sorted(os.listdir(tmp_path)) == ["custom_name.csv"]  # temp file cleaned up
+
+
+def test_load_log_file_missing_returns_empty(tmp_path):
+    df = store.load_log_file(str(tmp_path / "nope.csv"))
+    assert list(df.columns) == store.LOG_COLUMNS and len(df) == 0
+
+
+def test_check_log_file_missing_and_empty_ok(tmp_path):
+    assert store.check_log_file(str(tmp_path / "nope.csv")) is None
+    (tmp_path / "empty.csv").write_text("")
+    assert store.check_log_file(str(tmp_path / "empty.csv")) is None
+
+
+def test_check_log_file_subset_of_schema_ok(tmp_path):
+    (tmp_path / "old.csv").write_text("test_id,te\nw1,5\n")
+    assert store.check_log_file(str(tmp_path / "old.csv")) is None
+
+
+def test_check_log_file_extra_column_rejected(tmp_path):
+    (tmp_path / "foreign.csv").write_text("test_id,te,my_extra\nw1,5,x\n")
+    msg = store.check_log_file(str(tmp_path / "foreign.csv"))
+    assert msg is not None and "my_extra" in msg
+
+
+def test_check_log_file_no_test_id_rejected(tmp_path):
+    (tmp_path / "nid.csv").write_text("te,Vinj\n5,6\n")
+    msg = store.check_log_file(str(tmp_path / "nid.csv"))
+    assert msg is not None and "test_id" in msg
+
+
+def test_check_log_file_unreadable_rejected(tmp_path):
+    (tmp_path / "bad.csv").write_bytes(b"\xff\xfe\x00\x01\x02\xff\xff")
+    assert store.check_log_file(str(tmp_path / "bad.csv")) is not None
+
+
+def test_create_log_file_writes_header_only(tmp_path):
+    path = str(tmp_path / "new.csv")
+
+    store.create_log_file(path)
+
+    assert list(pd.read_csv(path).columns) == store.LOG_COLUMNS
+    assert len(pd.read_csv(path)) == 0
+    assert store.check_log_file(path) is None
+
+
+def test_create_log_file_refuses_non_empty_file(tmp_path):
+    path = tmp_path / "old.csv"
+    store.save_log_file(str(path), pd.DataFrame([{"test_id": "w1"}], columns=store.LOG_COLUMNS))
+
+    with pytest.raises(FileExistsError):
+        store.create_log_file(str(path))
+
+    assert store.load_log_file(str(path))["test_id"].tolist() == ["w1"]
+
+
+def test_create_log_file_fills_empty_file(tmp_path):
+    path = tmp_path / "empty.csv"
+    path.write_text("")
+
+    store.create_log_file(str(path))
+
+    assert list(pd.read_csv(path).columns) == store.LOG_COLUMNS
+
+
+def test_single_file_entry_excludes_custom_log_in_same_folder(tmp_path):
+    well = tmp_path / "pad" / "wellA"
+    well.mkdir(parents=True)
+    f = well / "wellA_data.csv"
+    f.write_text("a")
+    log = well / "results.csv"
+    store.create_log_file(str(log))
+
+    entry, root = store.single_file_entry(str(f), exclude=str(log))
+
+    assert entry.test_id == "wellA"
+
+
+def test_single_file_entry_single_stem_folder_uses_folder_name(tmp_path):
+    well = tmp_path / "pad" / "wellA"
+    well.mkdir(parents=True)
+    f = well / "wellA_data.csv"
+    f.write_text("a")
+
+    entry, root = store.single_file_entry(str(f))
+
+    assert entry.test_id == "wellA"
+    assert root == str(tmp_path / "pad")
+    assert entry.csv_path == str(f)
+
+
+def test_single_file_entry_multi_stem_folder_qualifies_with_stem(tmp_path):
+    well = tmp_path / "pad" / "wellA"
+    well.mkdir(parents=True)
+    (well / "one.csv").write_text("a")
+    f = well / "two.csv"
+    f.write_text("a")
+
+    entry, root = store.single_file_entry(str(f))
+
+    assert entry.test_id == "wellA/two"
+
+
+def test_single_file_entry_no_match_falls_back_to_stem(tmp_path):
+    f = tmp_path / "ghost.csv"  # never created: not in os.listdir
+
+    entry, root = store.single_file_entry(str(f))
+
+    assert entry.test_id == "ghost"
+    assert entry.folder == str(tmp_path)
+
+
+def test_scan_root_exclude_drops_custom_log(tmp_path):
+    (tmp_path / "w1.csv").write_text("a")
+    custom = tmp_path / "my_log.csv"
+    custom.write_text("test_id\n")
+
+    assert {e.test_id for e in store.scan_root(str(tmp_path))} == {"w1", "my_log"}
+    got = store.scan_root(str(tmp_path), exclude=str(custom))
+
+    assert [e.test_id for e in got] == ["w1"]
+
+
+def test_list_tests_loads_from_log_path(tmp_path):
+    (tmp_path / "w1.csv").write_text("a")
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    custom = str(logs / "mine.csv")
+    store.save_log_file(custom, _one_row_df("other"))
+
+    entries, df = store.list_tests(str(tmp_path), log_path=custom)
+
+    assert df["test_id"].tolist() == ["other"]
+    assert [e.test_id for e in entries] == ["w1"]
