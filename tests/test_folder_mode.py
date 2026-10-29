@@ -143,6 +143,10 @@ def _save_stub(current_entry, td, notes="some notes"):
     stub.var_tvd = _Var(None)
     stub.var_well = _Var("")
     stub.var_formation = _Var("")
+    stub.var_operator = _Var("")
+    stub._known_operators = []
+    stub.var_api = _Var("")
+    stub.var_job_date = _Var("")
     stub.var_alpha = _Var(1.0)
     stub.var_step = _Var(30.0)
     stub._refresh_calls = []
@@ -548,7 +552,7 @@ class _Text:
 def _apply_stub():
     stub = types.SimpleNamespace()
     for name in ("var_surface", "var_rate", "var_volume", "var_density", "var_tvd",
-                 "var_well", "var_formation",
+                 "var_well", "var_formation", "var_operator", "var_api", "var_job_date",
                  "var_alpha", "var_step", "var_cscen", "var_pcscen", "var_ppaxis"):
         setattr(stub, name, _Var())
     stub.var_bhp = _Var()
@@ -1026,6 +1030,10 @@ def _finish_stub(tmp_path, folder_mode, monkeypatch, second_status="new"):
     stub.var_tvd = _Var(state.tvd_ft)
     stub.var_well = _Var(state.well_name)
     stub.var_formation = _Var(state.formation)
+    stub.var_operator = _Var(state.operator_at_test)
+    stub._known_operators = []
+    stub.var_api = _Var(state.api)
+    stub.var_job_date = _Var(state.job_date)
     stub.var_alpha = _Var(state.alpha)
     stub.var_step = _Var(state.resample_step)
     stub._sync_state_from_widgets = types.MethodType(DfitApp._sync_state_from_widgets, stub)
@@ -1054,6 +1062,7 @@ def _finish_stub(tmp_path, folder_mode, monkeypatch, second_status="new"):
     stub.log_path = None
     stub._log_target = types.MethodType(DfitApp._log_target, stub)
     stub._write_log_row = types.MethodType(DfitApp._write_log_row, stub)
+    stub._set_known_operators = lambda logged: None
     stub._advance_queue = types.MethodType(DfitApp._advance_queue, stub)
     stub._overview_scale_key = types.MethodType(DfitApp._overview_scale_key, stub)
     stub._finish = types.MethodType(DfitApp._finish, stub)
@@ -1317,6 +1326,10 @@ def _skip_test_real_refresh_stub(tmp_path):
     stub.var_tvd = _Var(state.tvd_ft)
     stub.var_well = _Var(state.well_name)
     stub.var_formation = _Var(state.formation)
+    stub.var_operator = _Var(state.operator_at_test)
+    stub._known_operators = []
+    stub.var_api = _Var(state.api)
+    stub.var_job_date = _Var(state.job_date)
     stub.var_alpha = _Var(state.alpha)
     stub.var_step = _Var(state.resample_step)
     stub._sync_state_from_widgets = types.MethodType(DfitApp._sync_state_from_widgets, stub)
@@ -1362,6 +1375,7 @@ def _skip_test_real_refresh_stub(tmp_path):
     stub.log_path = None
     stub._log_target = types.MethodType(DfitApp._log_target, stub)
     stub._write_log_row = types.MethodType(DfitApp._write_log_row, stub)
+    stub._set_known_operators = lambda logged: None
     stub._advance_queue = types.MethodType(DfitApp._advance_queue, stub)
     stub._skip_test = types.MethodType(DfitApp._skip_test, stub)
     return stub, entry1, entry2
@@ -1420,6 +1434,7 @@ def _overview_apply_stub(tmp_path):
     stub.var_density.set(None)
     stub.var_tvd.set(None)
     stub._apply_config = types.MethodType(DfitApp._apply_config, stub)
+    stub._commit_identity = lambda refresh=True: None
     stub._overview_gate = types.MethodType(DfitApp._overview_gate, stub)
     stub._overview_scale_key = types.MethodType(DfitApp._overview_scale_key, stub)
     stub.refresh()  # stores the surface-pressure view in _views["overview"]

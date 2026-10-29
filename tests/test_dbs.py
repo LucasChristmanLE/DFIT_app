@@ -2,9 +2,9 @@
 
 ``write_dbs`` builds a minimal, spec-valid .DBS file in memory so the round-trip tests don't
 depend on a real Fracpro export. Only the first 4 bytes of the 8-byte header prefix are a
-constant magic; bytes 4-7 are a per-file save timestamp that varies between real exports, so
-``write_dbs`` deliberately uses a save-timestamp different from any real file's to pin that
-those bytes are never validated. The real-file smoke tests at the bottom exercise the actual
+constant magic; bytes 4-7 are the per-file data start time, which only feeds
+``TestData.start_time`` (tests/test_start_time.py) and never fails a load, so ``write_dbs``
+uses an arbitrary one. The real-file smoke tests at the bottom exercise the actual
 Caprito 99-202H merged file and the Argentine State 7170 file on disk and are skipped if those
 files aren't present.
 """

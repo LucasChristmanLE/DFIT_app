@@ -18,7 +18,7 @@ from typing import Optional
 
 import numpy as np
 
-from . import interpret, io_load, resample, units
+from . import identity, interpret, io_load, resample, units
 from .gfunction import g_time
 from .io_load import ChannelConfig, TestData
 
@@ -94,6 +94,11 @@ class PickState:
     tvd_ft: Optional[float] = None
     well_name: str = ""
     formation: str = ""
+    # Test identity, as the interpreter entered it (compute_all validates; see res.api/job_date).
+    # Operator and job date are prefilled when blank (ui._fill_identity_blanks); API is manual.
+    api: str = ""
+    operator_at_test: str = ""
+    job_date: str = ""
 
     # --- G-function / resampling ---
     alpha: float = 1.0
@@ -321,6 +326,13 @@ def _decode(d: dict) -> PickState:
     for key in ("closure_scenario", "postclosure_scenario", "contact_rule"):
         if key in d and d[key] is None:
             d[key] = ""
+    # Identity text fields: null -> "", a number (an API typed as one) -> its digits.
+    for key in ("api", "operator_at_test", "job_date"):
+        v = d.get(key)
+        if key in d and not isinstance(v, str):
+            if isinstance(v, float) and v.is_integer():
+                v = int(v)
+            d[key] = "" if v is None or isinstance(v, bool) else str(v)
     # Old saves store the postclosure scenario's pre-rename label (the combobox values in
     # ui.py:POSTCLOSURE_SCENARIOS changed to the descriptive ResFrac guide titles); map the four
     # renamed labels to their current form so a loaded save matches the combobox. Unrecognized
@@ -576,6 +588,9 @@ class DerivedResults:
     # Shut-in to the effective tail cutoff (interpret.resolve_tail_cut_dt), clamped to the last
     # sample; the end of the record when nothing cuts it.
     falloff_duration_s: Optional[float] = None
+    # state.api as 10 digits / state.job_date as ISO, or None when blank or invalid.
+    api: Optional[str] = None
+    job_date: Optional[str] = None
 
     # arrays for plotting (not serialized)
     t_all_s: Optional[np.ndarray] = field(default=None, repr=False)
@@ -762,6 +777,22 @@ def _hr_label(dt_s: float) -> str:
     return "<0.01" if s == "0.00" else s
 
 
+def _check_identity(state: PickState, res: DerivedResults) -> None:
+    """Set res.api/res.job_date from the entered text; an invalid value is noted and not logged,
+    and blank fields are listed in one note."""
+    api, job_date = (state.api or "").strip(), (state.job_date or "").strip()
+    res.api = identity.normalize_api(api)
+    res.job_date = identity.parse_job_date(job_date)
+    if api and res.api is None:
+        res.notes.append(f"API {api[:20]!r} is not a 10-digit API; not logged")
+    if job_date and res.job_date is None:
+        res.notes.append(f"Job date {job_date[:20]!r} is not YYYY-MM-DD or M/D/YYYY; not logged")
+    blank = [name for name, value in (("operator", state.operator_at_test), ("API", api),
+                                      ("job date", job_date)) if not (value or "").strip()]
+    if blank:
+        res.notes.append(f"Identity blank: {', '.join(blank)}")
+
+
 def compute_all(state: PickState, td: TestData) -> DerivedResults:
     """Compute every derived value that the current PickState supports. Missing picks -> None.
 
@@ -796,6 +827,7 @@ def compute_all(state: PickState, td: TestData) -> DerivedResults:
         if det is not None and det.factor != 1.0:
             notes.append(f"{kind}: {det.unit}×{det.factor:.6g} ({det.source})")
     res.unit_conversion_note = "; ".join(notes)
+    _check_identity(state, res)
 
     res.blockers.extend(blocking_issues(state))
     if not (state.bhp_col or state.surface_col):

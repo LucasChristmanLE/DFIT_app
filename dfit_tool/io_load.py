@@ -19,6 +19,7 @@ from __future__ import annotations
 import csv
 import datetime as _dt
 import itertools
+import os
 import re
 import struct
 import xml.etree.ElementTree as _ET
@@ -1050,6 +1051,10 @@ class TestData:
     # unlike unit_warnings; model.compute_all folds these into DerivedResults.warnings every
     # recompute so they surface in the same panel.
     load_warnings: list[str] = field(default_factory=list, repr=False)
+    # Naive local wall clock at t_s = 0, or None when the time base has no real clock (an
+    # elapsed/clock fallback, or a DBS header start that fails load_dbs's sanity check). Used only
+    # to suggest the job date.
+    start_time: Optional[_dt.datetime] = None
 
     @property
     def n(self) -> int:
@@ -2437,6 +2442,7 @@ def _finish_frame(df: pd.DataFrame, path: str) -> TestData:
     return TestData(
         path=path, df=df, datetime_col=dt_col, t_s=t_s, columns=list(df.columns),
         load_warnings=outlier_warnings + edge_warnings,
+        start_time=pd.Timestamp(dt.dropna().iloc[0]).to_pydatetime(),
     )
 
 
@@ -2455,7 +2461,7 @@ def load_csv(path: str) -> TestData:
 # --------------------------------------------------------------------------------------------------
 # Reverse-engineered layout (little-endian throughout):
 #   0x000            4-byte magic: 77 EF CD AB
-#   0x004  uint32    file save timestamp (Unix epoch seconds; varies per file -- not validated)
+#   0x004  uint32    data start time (Unix epoch seconds, UTC; see _dbs_start_time)
 #   0x2B4  uint32    n_channels
 #   0x2B8  uint32    n_samples
 #   0x2C0  float32   sample interval, in MINUTES
@@ -2467,14 +2473,32 @@ def load_csv(path: str) -> TestData:
 #     +16  cstr      display name (latin-1, NUL-terminated); rest of the record is unused
 #   data_offset ...  n_samples records of (4 + 4*n_channels) bytes each:
 #                    uint32 sample index, then one float32 per channel (table order)
-# There is no absolute start timestamp for the *data* in the file -- only elapsed time
-# (index * interval). The 0x004 timestamp is when the file was saved, not when logging started.
+# The samples carry only elapsed time (index * interval). The 0x004 timestamp is the data start
+# (Unix seconds, UTC): it matched the paired CSV's first timestamp to the second on 11/11 pairs.
+# It can be wrong (16 of 1,835 corpus files start after their own mtime: a 2038-01-19 sentinel,
+# or a clock a year off), so _dbs_start_time rejects a start before 1990 or after the file mtime.
 _DBS_MAGIC = bytes.fromhex("77efcdab")
 _DBS_HEADER_SIZE = 0x334
 _DBS_CHANNEL_RECORD_SIZE = 84
 # Garbage-header guard only; the data_offset and file-size checks are what validate the layout.
 # Full frac-van exports carry every pump, zipper, and additive channel (Raindance 26-089HN: 191).
 _DBS_MAX_CHANNELS = 1024
+_DBS_START_MIN = _dt.datetime(1990, 1, 1)
+# Slack past the file mtime for a start stamped by a clock slightly ahead of the saving machine.
+_DBS_START_MTIME_SLACK_S = 86400
+
+
+def _dbs_start_time(path: str, unix_s: int) -> Optional[_dt.datetime]:
+    """The header's data start as naive local time, or None when it is before 1990 or later than
+    the file mtime (plus a day). Local time is this machine's zone, which is what CSV exports of
+    the same job carry."""
+    try:
+        if unix_s > os.path.getmtime(path) + _DBS_START_MTIME_SLACK_S:
+            return None
+        start = _dt.datetime.fromtimestamp(unix_s)
+    except (OSError, OverflowError, ValueError):
+        return None
+    return start if start >= _DBS_START_MIN else None
 
 
 def load_dbs(path: str) -> TestData:
@@ -2607,7 +2631,9 @@ def load_dbs(path: str) -> TestData:
         cols[name] = rec[f"c{i}"].astype(np.float64)
     df = pd.DataFrame(cols)
 
-    return TestData(path=path, df=df, datetime_col=dt_col, t_s=t_s, columns=list(df.columns))
+    start_time = _dbs_start_time(path, struct.unpack_from("<I", data, 0x004)[0])
+    return TestData(path=path, df=df, datetime_col=dt_col, t_s=t_s, columns=list(df.columns),
+                    start_time=start_time)
 
 
 # --------------------------------------------------------------------------------------------------

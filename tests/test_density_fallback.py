@@ -59,7 +59,7 @@ def test_log_row_fallback_false_by_default(tmp_path):
 
 
 def test_log_column_appended_at_tail():
-    assert store.LOG_COLUMNS[-5] == "density_fallback"
+    assert store.LOG_COLUMNS[-8] == "density_fallback"
 
 
 def test_picks_json_round_trip(tmp_path):
@@ -111,12 +111,13 @@ def test_uncheck_restores_previous_value_and_enables_entry():
 
 
 def test_sync_forces_fallback_density():
-    stub = types.SimpleNamespace(td=None, state=PickState(density_ppg=9.0))
+    stub = types.SimpleNamespace(td=None, state=PickState(density_ppg=9.0), _known_operators=[])
     for name, val in [("var_surface", ""), ("var_rate", ""), ("var_volume", ""),
                       ("var_bhp", "Calculated"), ("var_surface_unit", "auto"), ("var_bhp_unit", "auto"),
                       ("var_rate_unit", "auto"), ("var_volume_unit", "auto"),
                       ("var_density", "9.0"), ("var_density_fallback", True),
                       ("var_tvd", ""), ("var_well", ""), ("var_formation", ""),
+                      ("var_operator", ""), ("var_api", ""), ("var_job_date", ""),
                       ("var_alpha", "1.0"), ("var_step", "30")]:
         setattr(stub, name, _Var(val))
     DfitApp._sync_state_from_widgets(stub)

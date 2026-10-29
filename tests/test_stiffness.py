@@ -749,6 +749,7 @@ def _goto_stub(postclosure_scenario):
     stub._refresh_calls = []
     stub.refresh = lambda: stub._refresh_calls.append(True)
     stub._goto = types.MethodType(DfitApp._goto, stub)
+    stub._fill_identity_blanks = lambda: None
     return stub
 
 
@@ -819,11 +820,11 @@ def test_status_for_all_eight_steps_done_is_done():
 def test_log_columns_has_shmin_stiffness_appended_at_the_tail():
     # "stiffness_no_upturn", "tail_guard_override", and "tangent_uninterpretable" were appended
     # after these two later still, so this checks the -5:-3 slice rather than the very tail.
-    assert store.LOG_COLUMNS[-20:-18] == ["Shmin_stiffness", "Shmin_stiffness_gradient"]
+    assert store.LOG_COLUMNS[-23:-21] == ["Shmin_stiffness", "Shmin_stiffness_gradient"]
 
 
 def test_log_row_records_the_stiffness_pressure_basis(tmp_path):
-    assert store.LOG_COLUMNS[-1] == "stiffness_pressure_basis"
+    assert store.LOG_COLUMNS[-4] == "stiffness_pressure_basis"
     td, st, res = _state_with_pore_pressure()
     entry = store.TestEntry(test_id="well1", folder=str(tmp_path))
     active_path = str(tmp_path / "well1.csv")
@@ -1021,7 +1022,7 @@ def test_missing_key_decodes_to_false(tmp_path):
 def test_log_row_has_stiffness_no_upturn_column_at_the_tail(tmp_path):
     # "tail_guard_override" and "tangent_uninterpretable" were appended after this one -- see
     # tests/test_tail_trim.py's test_log_columns_tail_is_tail_guard_override.
-    assert store.LOG_COLUMNS[-18] == "stiffness_no_upturn"
+    assert store.LOG_COLUMNS[-21] == "stiffness_no_upturn"
 
     td, st, res = _state_with_pore_pressure()
     st.stiffness_no_upturn = True

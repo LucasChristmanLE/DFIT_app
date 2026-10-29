@@ -111,7 +111,15 @@ LOG_COLUMNS = [
     # compliance anchor) or "measured" (BHP throughout, no anchor); blank with no curve --
     # tail-appended per the append-only convention.
     "stiffness_pressure_basis",
+    # Test identity (spec: .scratch/log-identity-columns): api is 10-digit text, job_date ISO,
+    # both blank when invalid (model._check_identity) -- tail-appended per the append-only
+    # convention.
+    "api",
+    "operator_at_test",
+    "job_date",
 ]
+# Read back as text: a numeric read drops the leading 0 of a Colorado (05) API.
+_LOG_STR_COLUMNS = {"test_id": str, "api": str, "job_date": str}
 
 _CLOSURE_QUALITY_BY_PREFIX = {
     "C-A": "clear", "C-B": "adequate", "C-C": "no-contact", "C-D": "rapid",
@@ -486,11 +494,12 @@ def load_log_file(path: str) -> pd.DataFrame:
     row data preserved; the returned column order is always LOG_COLUMNS. `test_id` is forced to
     a string dtype -- otherwise a purely numeric test_id (e.g. a folder named "7170")
     round-trips as int64, and `upsert_log_row`'s string-keyed comparison never matches, silently
-    appending a duplicate row on every save instead of updating."""
+    appending a duplicate row on every save instead of updating. `api` and `job_date` are read
+    as text too, so a 05... API keeps its leading zero."""
     try:
         if not os.path.exists(path) or os.path.getsize(path) == 0:
             return pd.DataFrame(columns=LOG_COLUMNS)
-        df = pd.read_csv(path, dtype={"test_id": str})
+        df = pd.read_csv(path, dtype=_LOG_STR_COLUMNS)
     except Exception as e:
         raise LogReadError(path, e) from e
     for col in LOG_COLUMNS:
@@ -724,4 +733,7 @@ def build_log_row(entry: TestEntry, active_path: str, root: str, state: PickStat
         "stiffness_pressure_basis": ("" if res.stiffness_S is None
                                      else "measured" if res.stiffness_uses_measured
                                      else "effective"),
+        "api": res.api,
+        "operator_at_test": state.operator_at_test.strip(),
+        "job_date": res.job_date,
     }

@@ -1820,6 +1820,34 @@ In `questionnaire.py`'s TVD label matching, a digit-ending token right before an
 `"3368 mTVD / mMD 6656"`) are still read as feet/MD respectively -- inherent label-vs-suffix
 ambiguity, not fixed.
 
+## Test identity (`identity.py`, `TestData.start_time`)
+
+- DBS 0x004 is the data start time (Unix seconds, UTC), not a save time. It matched the paired
+  CSV's first timestamp to the second on 11/11 pairs (the CSVs are Mountain local, 6-7 h behind
+  UTC). 16 of 1,835 corpus DBS files start after their own mtime (a 2038-01-19 sentinel, or a
+  clock a year off with the same month/day), so `io_load._dbs_start_time` rejects a start later
+  than mtime + 1 day, and anything before 1990. Against the summary's Job Date, the DBS start is
+  within 3 days on 88% of tests. Conversion uses this machine's local zone, so a test pumped
+  near midnight in another zone can date one day off.
+- The job date is always taken from the data at shut-in (user decision, 2026-10-29). The
+  questionnaire's "Date Pumped" is not read: it is blank in about half of the 124 DJ
+  questionnaires, and the INP header's job date carries template dates across unrelated wells.
+- API is manual. The questionnaire template has no API row (4 of 124 DJ questionnaires carry an
+  API cell) and neither the DBS nor the CSV has one.
+- Operator suggestion scans path components shallowest first, so `C:\DFIT Data\WPX Energy\
+  Williams 12-3H\…` gives WPX Energy, not Williams. The flattened `C:\DFIT Organized\DJ` layout
+  has no operator folder; its `APC …` folders resolve through the `apc` alias. Aliases
+  (`identity.OPERATOR_ALIASES`): `apc`/`anadarko` → Anadarko Petroleum, `oxy` → Occidental
+  Petroleum, `crestone` → Crestone Peak, `vermilion` → Vermillion (the summary's spelling),
+  `civitas`/`kiwetinohk`/`laredo` for the folders named by a one-word core. Path text matches an
+  operator's full key, its core only when that is two or more words ("fifth creek"), and its
+  aliases. A one-word core never matches a path: "rockies", "true", and "liberty" are place,
+  depth, and project words ("C:\...\Rockies\...", "True Vertical", "Liberty DFITs"). One-word names ("Williams", "Apache", "Shell") still match on their full key, so a
+  "Williams County" folder can still suggest Williams; the provenance line shows where it came
+  from. "Liberty Oilfield Services"/"Liberty Energy" are stripped first. "Oxy (formerly APC)"
+  matches two operators equally and is skipped. Typed text snaps through key, core (one-word
+  included), or alias, since the analyst typed the whole name.
+
 ## Not built / notes
 
 - Unsupported XLSX/CSV layouts, which the extrapolation gate above refuses to guess at (the

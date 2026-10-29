@@ -80,6 +80,9 @@ FROZEN = [
     'tangent_low_confidence',
     'loglog_low_confidence',
     'stiffness_pressure_basis',
+    'api',
+    'operator_at_test',
+    'job_date',
 ]
 
 

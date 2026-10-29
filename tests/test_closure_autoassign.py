@@ -174,6 +174,7 @@ def test_dfit_app_goto_shows_seed_hint_after_refresh():
     stub.refresh = lambda: shown.append("refresh")
     stub.hint_lbl = types.SimpleNamespace(config=lambda text: shown.append(text))
     stub._goto = types.MethodType(DfitApp._goto, stub)
+    stub._fill_identity_blanks = lambda: None
 
     stub._goto("overview")  # a bare PickState blocks every later step
 

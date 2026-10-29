@@ -25,8 +25,8 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from . import APP_NAME
-from . import (colors as C, guide_content, interpret, io_load, picks, plots, settings, sliders,
-               store, summary)
+from . import (colors as C, guide_content, identity, interpret, io_load, picks, plots, settings,
+               sliders, store, summary)
 from .model import (FALLBACK_DENSITY_PPG, NO_CONTACT_SCENARIOS, STEPS, PickState, TangentPick, blocking_issues,
                     compute_all,
                     infer_step_status, last_step, loglog_window_suppressed, next_step,
@@ -403,6 +403,36 @@ class DfitApp:
         ttk.Entry(meta, textvariable=self.var_well, width=36).pack(side="left")
         ttk.Label(meta, text="Formation:").pack(side="left", padx=(8, 2))
         ttk.Entry(meta, textvariable=self.var_formation, width=26).pack(side="left")
+        # Test identity for the log. Operator is an editable combobox over the known list (seeds
+        # plus the active log's operators), snapped to the list's spelling on commit.
+        self.var_operator = tk.StringVar()
+        self.var_api = tk.StringVar()
+        self.var_job_date = tk.StringVar()
+        self._known_operators = identity.known_operators()
+        ttk.Label(meta, text="Operator:").pack(side="left", padx=(8, 2))
+        self.cmb_operator = ttk.Combobox(meta, textvariable=self.var_operator, width=26,
+                                         values=self._known_operators)
+        self.cmb_operator.pack(side="left")
+        self.cmb_operator.bind("<KeyRelease>", self._on_operator_key)
+        self.cmb_operator.bind("<<ComboboxSelected>>", lambda e: self._commit_identity())
+        self.cmb_operator.bind("<FocusOut>", lambda e: self._commit_identity())
+        # API and job date entries are masked: dashes go in as digits are typed or pasted
+        # (_EntryMask). The stored API stays 10 bare digits (_canonical_identity). The date format
+        # is also in its label (ttk.Entry has no placeholder text); M/D/YYYY typed with slashes is
+        # left alone and rewritten to ISO on commit.
+        ttk.Label(meta, text="API:").pack(side="left", padx=(8, 2))
+        self.ent_api = ttk.Entry(meta, textvariable=self.var_api, width=18)
+        self.ent_api.pack(side="left")
+        self.ent_api.bind("<FocusOut>", lambda e: self._commit_identity())
+        ttk.Label(meta, text="Job date (YYYY-MM-DD):").pack(side="left", padx=(8, 2))
+        self.ent_job_date = ttk.Entry(meta, textvariable=self.var_job_date, width=11)
+        self.ent_job_date.pack(side="left")
+        self.ent_job_date.bind("<FocusOut>", lambda e: self._commit_identity())
+        self._masks = [
+            _EntryMask(self.root, self.ent_api, self.var_api, identity.format_api_edit),
+            _EntryMask(self.root, self.ent_job_date, self.var_job_date,
+                       identity.format_job_date_edit),
+        ]
 
         cfg2 = ttk.Frame(self.root, padding=(6, 2))
         cfg2.pack(side="top", fill="x")
@@ -427,6 +457,11 @@ class DfitApp:
         # (and judge) the source. Shown on Overview only, below the issues list
         # (_update_issues_panel).
         self._quest_lines: list[str] = []
+        # Provenance for an operator/job date _fill_identity_blanks prefilled; Overview only.
+        self._identity_lines: list[str] = []
+        self._identity_filled = False  # reset per load; see _fill_identity_blanks
+        # Identity values the last refresh rendered; _commit_identity refreshes when they change.
+        self._identity_committed: Optional[tuple] = None
 
     def _build_body(self):
         # sashrelief="raised" makes the drag affordance visible; a flat sash is
@@ -783,9 +818,15 @@ class DfitApp:
         self.var_tvd.set("")
         self.var_well.set("")
         self.var_formation.set("")
+        self.var_operator.set("")
+        self.var_api.set("")
+        self.var_job_date.set("")
+        self._identity_lines = []
+        self._identity_filled = False
+        self._refresh_known_operators()
         self._load_questionnaire(path, well_hint)
         self._sync_state_from_widgets()
-        self._goto("overview")
+        self._goto("overview")  # fills blank operator/job date once shut-in is seeded
         return True
 
     def _on_root_close(self):
@@ -1218,6 +1259,8 @@ class DfitApp:
             return
         self.log_df = store.upsert_log_row(log_df, row)
         store.save_log_file(target, self.log_df)
+        # A hand-typed operator joins the suggestions once it is logged.
+        self._set_known_operators(self.log_df["operator_at_test"])
 
     def _advance_queue(self):
         """Advance to the next "new"-status queue entry (scanning circularly from just after
@@ -1346,6 +1389,77 @@ class DfitApp:
         if parts:
             self._quest_lines = [f"File: {os.path.basename(xlsx_path)}"] + parts
 
+    def _refresh_known_operators(self):
+        """Operator suggestions: the seed list plus every operator in the log this test will be
+        written to (the chosen log, else the open folder's dfit_log.csv). Unreadable or missing
+        log -> seeds only. Uses folder_root rather than _log_target, since a folder-mode load
+        runs before current_entry is set."""
+        target = self.log_path or (os.path.join(self.folder_root, store.LOG_FILENAME)
+                                   if self.folder_root else None)
+        logged = ()
+        if target:
+            try:
+                logged = store.load_log_file(target)["operator_at_test"]
+            except Exception:
+                pass
+        self._set_known_operators(logged)
+
+    def _set_known_operators(self, logged):
+        self._known_operators = identity.known_operators(logged)
+        self.cmb_operator["values"] = self._known_operators
+
+    def _on_operator_key(self, _event=None):
+        """Narrow the drop-down to operators containing what has been typed."""
+        self.cmb_operator["values"] = identity.filter_operators(self._known_operators,
+                                                                self.var_operator.get())
+
+    def _commit_identity(self, refresh: bool = True):
+        """Operator, API, and job date entries finished editing: write the canonical form
+        (_canonical_identity) into the entries and state, restore the full drop-down list, and
+        refresh when a value changed so the identity notes and results rows follow. _apply_config
+        passes refresh=False (it refreshes itself)."""
+        values = _canonical_identity(self.var_operator.get(), self.var_api.get(),
+                                     self.var_job_date.get(), self._known_operators)
+        # Against the last rendered values, not state: a mid-edit sync may already hold these.
+        changed = values != self._identity_committed
+        self._identity_committed = values
+        for var, value in zip((self.var_operator, self.var_api, self.var_job_date), values):
+            var.set(value)
+        self.state.operator_at_test, self.state.api, self.state.job_date = values
+        self.cmb_operator["values"] = self._known_operators
+        if changed and refresh and self.td is not None:
+            self.refresh()
+
+    def _fill_identity_blanks(self):
+        """Prefill a blank operator (from the folder path / file name) and a blank job date (the
+        data timestamp at shut-in, or at the data start with no usable shut-in time). Runs once
+        per load, on the first Overview visit (_goto, after the shut-in seed); a value entered,
+        saved, or cleared since is never touched."""
+        if self.td is None or self._identity_filled:
+            return
+        self._identity_filled = True
+        if not self.state.operator_at_test.strip():
+            hit = identity.suggest_operator(self.td.path, self._known_operators,
+                                            top=self.folder_root)
+            if hit is not None:
+                self.state.operator_at_test = hit[0]
+                self._identity_lines.append(f'Operator: {hit[0]} [from "{hit[1]}"]')
+        if not self.state.job_date.strip():
+            job_date = identity.job_date_from_data(self.td.start_time, self.td.t_s,
+                                                   self.state.shutin_idx)
+            if job_date is not None:
+                self.state.job_date = job_date
+                idx = self.state.shutin_idx
+                at_shutin = (idx is not None and 0 <= idx < len(self.td.t_s)
+                             and math.isfinite(float(self.td.t_s[idx])))
+                at = "shut-in" if at_shutin else "data start"
+                self._identity_lines.append(f"Job date: {job_date} [data timestamp at {at}]")
+        self.var_operator.set(self.state.operator_at_test)
+        self.var_job_date.set(self.state.job_date)
+        # _goto refreshes right after this, so these are the values the panel will show.
+        self._identity_committed = (self.state.operator_at_test, self.state.api,
+                                    self.state.job_date)
+
     def _update_bhp_combo_font(self):
         """Italic Bottomhole combobox text while "Calculated" is selected, normal otherwise, and
         the Bottomhole unit combo disabled then (no channel, so no unit to change and no picks
@@ -1388,6 +1502,11 @@ class DfitApp:
         self.state.tvd_ft = _num(self.var_tvd.get(), self.state.tvd_ft)
         self.state.well_name = self.var_well.get().strip()
         self.state.formation = self.var_formation.get().strip()
+        # Canonical form goes to state even without a focus-out (Finish/Next sync); the entries
+        # themselves are rewritten only by _commit_identity, never mid-keystroke.
+        self.state.operator_at_test, self.state.api, self.state.job_date = _canonical_identity(
+            self.var_operator.get(), self.var_api.get(), self.var_job_date.get(),
+            self._known_operators)
         self.state.alpha = _to_float(self.var_alpha.get()) or 1.0
         self.state.resample_step = _to_float(self.var_step.get()) or 30.0
         # Belt-and-suspenders: refresh_unit_detection also runs at the top of every compute_all,
@@ -1402,6 +1521,7 @@ class DfitApp:
     def _apply_config(self):
         if self.td is None:
             return
+        self._commit_identity(refresh=False)
         self._sync_state_from_widgets()
         # A density/TVD/channel change can move the pressure trace thousands of psi (surface ->
         # BHP); drop the stored Overview view so the renderer's default, which spans it, applies.
@@ -1736,6 +1856,9 @@ class DfitApp:
         if pp_from_peak(self.state):
             # Any step, so a resume onto stiffness or Overview (then Skip/Finish) still logs Pp.
             seed_hint = self._ensure_pce_peak() or seed_hint
+        if step == "overview":
+            # After the seed, so a fresh file's job date uses the seeded shut-in.
+            self._fill_identity_blanks()
         self.step = step
         self.refresh()
         if seed_hint:
@@ -2916,6 +3039,12 @@ class DfitApp:
                 ttk.Label(row, text=line[len(_QUEST_WARNING_PREFIX):], justify="left",
                           wraplength=max(wrap - prefix.winfo_reqwidth() - 4, 50)
                           ).pack(side="left", anchor="n", padx=(4, 0))
+        if self._identity_lines:
+            ttk.Label(self.frm_issues, text="Test identity (prefilled)", foreground=C.UI_MUTED,
+                      font=("", 9, "bold"), wraplength=wrap).pack(anchor="w", pady=(6, 0))
+            for line in self._identity_lines:
+                ttk.Label(self.frm_issues, text=f"• {line}", wraplength=wrap,
+                          justify="left").pack(anchor="w", fill="x")
         self.warn_lbl.config(text="", cursor="")
         self._warn_lbl_hidden = True
 
@@ -3051,6 +3180,11 @@ class DfitApp:
         self.var_tvd.set("" if self.state.tvd_ft is None else str(self.state.tvd_ft))
         self.var_well.set(self.state.well_name)
         self.var_formation.set(self.state.formation)
+        self.var_operator.set(self.state.operator_at_test)
+        self.var_api.set(self.state.api)
+        self.var_job_date.set(self.state.job_date)
+        self._identity_lines = []  # _goto below fills blanks from these values and rebuilds them
+        self._identity_filled = False
         # Density/TVD above now came from the picks file, not the questionnaire that was auto-
         # detected (if any) when the CSV was loaded -- clear the stale provenance label so it
         # doesn't misattribute these values.
@@ -3082,6 +3216,55 @@ class DfitApp:
             messagebox.showerror("Load picks failed", f"Could not read {path}: {e}")
             return
         self._apply_loaded_state(state)
+
+
+class _EntryMask:
+    """Reformat an entry after every edit with `edit(prev, text, cursor, key) -> (text, cursor)`
+    (identity.format_api_edit / format_job_date_edit). A write trace on `var` catches typing,
+    paste, and programmatic sets; the reformat is deferred to idle so the entry's cursor has
+    moved and a paste or a held key reformats once. Setting the text re-fires the trace; that
+    pass finds nothing to change."""
+
+    def __init__(self, root, entry, var, edit):
+        self.root, self.entry, self.var, self.edit = root, entry, var, edit
+        self.prev = ""
+        self.key: Optional[str] = None  # keysym of the last key pressed in the entry
+        self.pending = False
+        entry.bind("<KeyPress>", self._on_key, add="+")
+        var.trace_add("write", lambda *_: self._schedule())
+
+    def _on_key(self, event):
+        self.key = event.keysym
+
+    def _schedule(self):
+        if not self.pending:
+            self.pending = True
+            self.root.after_idle(self.apply)
+
+    def apply(self):
+        self.pending = False
+        text = self.var.get()
+        try:
+            cursor = int(self.entry.index("insert"))
+        except (tk.TclError, ValueError):
+            cursor = len(text)
+        new, pos = self.edit(self.prev, text, cursor, self.key)
+        self.key = None
+        self.prev = new
+        if new != text:
+            self.var.set(new)
+            self.entry.icursor(pos)
+
+
+def _canonical_identity(operator: str, api: str, job_date: str,
+                        known: list[str]) -> tuple[str, str, str]:
+    """(operator, api, job_date) as stored: the operator snapped to the known list's spelling,
+    a valid API as 10 digits and a valid date as ISO. Invalid text is kept as typed so
+    compute_all can note it (it logs blank)."""
+    api, job_date = (api or "").strip(), (job_date or "").strip()
+    return (identity.canonical_operator(operator or "", known),
+            identity.normalize_api(api) or api,
+            identity.parse_job_date(job_date) or job_date)
 
 
 def _to_float(s: str):

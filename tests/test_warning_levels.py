@@ -168,6 +168,7 @@ def test_goto_redirects_to_overview_when_blocked():
     stub._seed_step = lambda key: None
     stub.refresh = lambda: None
     stub._goto = types.MethodType(DfitApp._goto, stub)
+    stub._fill_identity_blanks = lambda: None
     stub._goto("injection")
     assert stub.step == "overview"
     assert "density" in stub.gate_lbl.text.lower()

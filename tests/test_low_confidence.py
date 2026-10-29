@@ -19,7 +19,7 @@ def test_defaults_false_and_columns_at_tail():
     assert st.compliance_low_confidence is False
     assert st.tangent_low_confidence is False
     assert st.loglog_low_confidence is False
-    assert store.LOG_COLUMNS[-4:-1] == ["compliance_low_confidence", "tangent_low_confidence",
+    assert store.LOG_COLUMNS[-7:-4] == ["compliance_low_confidence", "tangent_low_confidence",
                                       "loglog_low_confidence"]
 
 

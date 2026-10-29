@@ -220,7 +220,7 @@ def _row(tmp_path, st, td):
 
 def test_log_row_pce_peak_min(tmp_path):
     td, st, _ = _pce_state()
-    assert store.LOG_COLUMNS[-9] == "pce_peak_min"
+    assert store.LOG_COLUMNS[-12] == "pce_peak_min"
     row = _row(tmp_path, st, td)
     assert row["pce_peak_min"] == pytest.approx(compute_all(st, td).pce_peak_t / 60.0)
     st.postclosure_scenario = "PC-A linear"
@@ -268,6 +268,7 @@ def _goto_stub(td, st):
     stub.gate_lbl = types.SimpleNamespace(config=lambda **kw: None)
     stub._ensure_pce_peak = types.MethodType(DfitApp._ensure_pce_peak, stub)
     stub._goto = types.MethodType(DfitApp._goto, stub)
+    stub._fill_identity_blanks = lambda: None
     return stub
 
 

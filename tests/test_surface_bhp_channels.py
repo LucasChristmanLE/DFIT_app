@@ -335,12 +335,13 @@ def test_sync_maps_calculated_sentinel_to_empty_bhp_col():
         def get(self):
             return self.v
 
-    stub = types.SimpleNamespace(td=None, state=PickState())
+    stub = types.SimpleNamespace(td=None, state=PickState(), _known_operators=[])
     for name, val in [("var_surface", "S"), ("var_bhp", ui.BHP_CALCULATED), ("var_rate", ""),
                       ("var_volume", ""), ("var_surface_unit", "kpa"), ("var_bhp_unit", "auto"),
                       ("var_rate_unit", "auto"), ("var_volume_unit", "auto"),
                       ("var_density", ""), ("var_density_fallback", False), ("var_tvd", ""),
                       ("var_well", ""), ("var_formation", ""), ("var_alpha", "1.0"),
+                      ("var_operator", ""), ("var_api", ""), ("var_job_date", ""),
                       ("var_step", "30")]:
         setattr(stub, name, _Var(val))
     ui.DfitApp._sync_state_from_widgets(stub)

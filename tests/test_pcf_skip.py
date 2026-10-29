@@ -196,6 +196,7 @@ def _goto_stub(postclosure_scenario):
     stub._refresh_calls = []
     stub.refresh = lambda: stub._refresh_calls.append(True)
     stub._goto = types.MethodType(DfitApp._goto, stub)
+    stub._fill_identity_blanks = lambda: None
     return stub
 
 

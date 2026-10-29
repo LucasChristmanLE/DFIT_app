@@ -59,9 +59,10 @@ matplotlib 3.11.1, scipy 1.18.0 (pinned but not imported anywhere), openpyxl 3.1
 
 The package `dfit_tool/` is layered. Lower layers never import higher ones.
 
-    app → ui → {io_load, picks, plots, sliders, model, interpret, questionnaire, store, settings}
+    app → ui → {io_load, picks, plots, sliders, model, interpret, questionnaire, store, settings,
+                identity}
     picks, plots → model, io_load, interpret
-    model → interpret, resample, io_load
+    model → interpret, resample, io_load, identity
     resample → gfunction
     store → model, questionnaire
     io_load, questionnaire → units
@@ -74,6 +75,8 @@ The package `dfit_tool/` is layered. Lower layers never import higher ones.
   Liberty brand palette and plot/UI color roles (`PRESSURE`, `DERIVATIVE`, `RATE`, `ISIP_LINE`,
   `WINDOW`, …), no imports. Renderers and the shell use the role names; no color literals
   elsewhere. Gold is 1.7:1 on white; it carries the windows, tail trim, and ISIP lines.
+  `identity.py` (stdlib only): test identity helpers. API and job-date normalization, the seed
+  operator list and aliases, operator snapping/filtering, and the path-based operator suggestion.
 - **Compute core.** `resample.py`: 30-psi pressure-increment resampling, diagnostic derivatives
   (dP/dG, G·dP/dG, d²P/dG², t·dP/dt), the tail guard, and dropout detection. `model.py`:
   `PickState` (the serializable interpreter choices), `DerivedResults`, and
@@ -133,6 +136,10 @@ This is the most fragile area. Details and the files behind each rule are in
    leading/trailing block of blank or error-token timestamps only when the block is contiguous,
    the good run is exactly regular, the local slope agrees, and the columns continue
    (`_columns_continue`). Otherwise it warns with a row count. Never silently drop rows.
+5. `TestData.start_time`: naive local wall clock at `t_s = 0`. CSV/XLSX take the first valid
+   timestamp on the real-datetime path; the elapsed/clock fallbacks leave it None. DBS reads the
+   header's 0x004 data start (Unix UTC, converted to this machine's local time), rejected before
+   1990 or after the file mtime + 1 day. Used only to suggest the job date.
 
 `load_xlsx` (openpyxl, `read_only=True, data_only=True`): `_xlsx_find_header` finds a header row
 (text with a datetime-ish name, followed by data-shaped rows spanning >=2 columns, skipping a few
@@ -182,7 +189,28 @@ non-data `.xlsx` files; it never raises.
   progress.
 - `dfit_log.csv`: `build_log_row` maps `PickState`/`DerivedResults` to `store.LOG_COLUMNS`
   (computes nothing itself); `upsert_log_row` replaces or appends by `test_id`. **`LOG_COLUMNS`
-  is append-only**: new columns go at the end.
+  is append-only**: new columns go at the end. `load_log_file` reads `test_id`, `api`, and
+  `job_date` as text.
+- Test identity (spec `.scratch/log-identity-columns/spec.md`): Operator (editable combobox),
+  API, and Job date entries on the metadata row, in `PickState.operator_at_test`/`api`/`job_date`,
+  logged as `operator_at_test`/`api`/`job_date`. The API and job date entries are masked as typed
+  or pasted (`ui._EntryMask`, an idle-deferred var trace, over `identity.format_api_edit` /
+  `format_job_date_edit`): API digits grouped `05-123-45678[-00-00]` (state, picks, and the log
+  keep bare digits); date digits grouped `YYYY-MM-DD`, a separator after a one-digit month/day
+  zero-pads it, a pasted full date (`5/4/2019`) becomes ISO at once, and text with `/` typed by
+  hand is left for the commit to convert. `compute_all` sets
+  `res.api` (10 digits; 9 not starting with 0 are zero-padded since Excel drops the 0 of `05`,
+  12/14 truncated) and `res.job_date` (ISO); an invalid entry is a note and logs
+  blank, and blank fields get one `Identity blank: …` note. API is manual only. Once per load, on
+  the first Overview visit (after the shut-in seed), `ui._fill_identity_blanks` fills a blank
+  operator from `identity.suggest_operator` (folder path and file name, shallowest component
+  first, Liberty phrases ignored, a one-word core like "rockies" never matches) and a blank job
+  date from `start_time` at the shut-in sample; it never replaces a value, and a cleared one stays
+  cleared. The operator list is `identity.SEED_OPERATORS` (the 2024 summary's operators plus
+  `C:\DFIT Data` operator folders) plus every `operator_at_test` in the active log, so a
+  hand-typed name joins the list once logged. `_sync_state_from_widgets` stores the canonical
+  form (`ui._canonical_identity`: operator snapped to the list's spelling, valid API/date
+  normalized); focus-out/Apply (`_commit_identity`) also rewrites the entries and refreshes.
 - Low confidence: "Low confidence" checkboxes on the gfunction (`PickState.compliance_low_confidence`),
   tangent (`tangent_low_confidence`), and log-log/porepressure (`loglog_low_confidence`) steps. Informational only: they change no computed value
   and are logged as `compliance_low_confidence` / `tangent_low_confidence` / `loglog_low_confidence`.
