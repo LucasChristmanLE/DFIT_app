@@ -2472,6 +2472,9 @@ def load_csv(path: str) -> TestData:
 _DBS_MAGIC = bytes.fromhex("77efcdab")
 _DBS_HEADER_SIZE = 0x334
 _DBS_CHANNEL_RECORD_SIZE = 84
+# Garbage-header guard only; the data_offset and file-size checks are what validate the layout.
+# Full frac-van exports carry every pump, zipper, and additive channel (Raindance 26-089HN: 191).
+_DBS_MAX_CHANNELS = 1024
 
 
 def load_dbs(path: str) -> TestData:
@@ -2528,8 +2531,10 @@ def load_dbs(path: str) -> TestData:
     interval_min = struct.unpack_from("<f", data, 0x2C0)[0]
     data_offset = struct.unpack_from("<I", data, 0x2CC)[0]
 
-    if not (1 <= n_channels <= 64):
-        raise ValueError(f"{path!r}: n_channels {n_channels} out of sane range (1..64)")
+    if not (1 <= n_channels <= _DBS_MAX_CHANNELS):
+        raise ValueError(
+            f"{path!r}: n_channels {n_channels} out of sane range (1..{_DBS_MAX_CHANNELS})"
+        )
     if n_samples <= 0:
         raise ValueError(f"{path!r}: n_samples {n_samples} is not positive")
     if not (np.isfinite(interval_min) and interval_min > 0):

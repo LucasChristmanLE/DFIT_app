@@ -121,6 +121,32 @@ def test_truncated_data_raises(tmp_path):
         io_load.load_dbs(str(path))
 
 
+def test_many_channels_load(tmp_path):
+    # Raindance 26-089HN: a full frac-van export with 191 channels (every pump, zipper, and
+    # additive). A 64-channel cap rejected it although offset and size were consistent.
+    path = tmp_path / "wide.dbs"
+    n = 191
+    names = [(f"Ch {i}", f"C{i:03d}") for i in range(n)]
+    records = [(k, *[float(k + i) for i in range(n)]) for k in range(3)]
+    write_dbs(path, names, records, interval_min=1.0 / 60.0)
+
+    td = io_load.load_dbs(str(path))
+
+    assert len(td.columns) == n + 1
+    np.testing.assert_allclose(td.column("Ch 190"), [190.0, 191.0, 192.0])
+
+
+def test_absurd_channel_count_raises(tmp_path):
+    path = tmp_path / "absurd.dbs"
+    write_dbs(path, [("P", "PRES")], [(0, 1.0)], interval_min=1.0)
+    data = bytearray(path.read_bytes())
+    struct.pack_into("<I", data, 0x2B4, 100_000)
+    path.write_bytes(bytes(data))
+
+    with pytest.raises(ValueError, match="n_channels"):
+        io_load.load_dbs(str(path))
+
+
 def test_wrong_data_offset_raises(tmp_path):
     path = tmp_path / "offset.dbs"
     write_dbs(path, [("P", "PRES")], [(0, 1.0), (1, 2.0)], interval_min=1.0)
