@@ -492,3 +492,13 @@ Accepted, not bugs to fix opportunistically. Full list with measured files in
 - 7-step-era saves read `"in_progress"` until the stiffness step is visited (intended).
 - Sample data, `Refs/`, and `.superpowers/` are gitignored. Old design specs are in
   `docs/superpowers/`. The log is CSV only (parquet mirror deferred).
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are local markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
