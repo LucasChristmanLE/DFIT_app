@@ -588,7 +588,8 @@ class DerivedResults:
     # Shut-in to the effective tail cutoff (interpret.resolve_tail_cut_dt), clamped to the last
     # sample; the end of the record when nothing cuts it.
     falloff_duration_s: Optional[float] = None
-    # state.api as 10 digits / state.job_date as ISO, or None when blank or invalid.
+    # state.api as 10 digits or an ST37-form Alberta UWI / state.job_date as ISO, or None when
+    # blank or invalid.
     api: Optional[str] = None
     job_date: Optional[str] = None
 
@@ -784,7 +785,7 @@ def _check_identity(state: PickState, res: DerivedResults) -> None:
     res.api = identity.normalize_api(api)
     res.job_date = identity.parse_job_date(job_date)
     if api and res.api is None:
-        res.notes.append(f"API {api[:20]!r} is not a 10-digit API; not logged")
+        res.notes.append(f"API {api[:21]!r} is not a 10-digit API or an Alberta UWI; not logged")
     if job_date and res.job_date is None:
         res.notes.append(f"Job date {job_date[:20]!r} is not YYYY-MM-DD or M/D/YYYY; not logged")
     blank = [name for name, value in (("operator", state.operator_at_test), ("API", api),

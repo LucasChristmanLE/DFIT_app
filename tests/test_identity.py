@@ -169,6 +169,44 @@ def test_normalize_api(text, want):
     assert idn.normalize_api(text) == want
 
 
+# Alberta UWIs are stored in AER ST37's Well_UWI form: LE/LSD-SEC-TWP-RGEWM/E.
+@pytest.mark.parametrize("text,want", [
+    ("00/14-22-065-16W5/0", "00/14-22-065-16W5/0"),
+    ("100/14-22-065-16W5/00", "00/14-22-065-16W5/0"),  # 16-character DLS form
+    ("102/06-03-071-05W6/02", "02/06-03-071-05W6/2"),
+    ("02/06-03-071-05W6/2", "02/06-03-071-05W6/2"),
+    ("F1/06-03-071-05W6/3", "F1/06-03-071-05W6/3"),  # lettered location exception
+    ("14-22-065-16W5", "00/14-22-065-16W5/0"),  # 2024 summary workbook form
+    ("14-22-65-16W5", "00/14-22-065-16W5/0"),
+    ("1-2-1-1W4", "00/01-02-001-01W4/0"),
+    (" 14 - 22-065-16 w5 ", "00/14-22-065-16W5/0"),
+    ("100/14-22-065-16w5/00", "00/14-22-065-16W5/0"),
+    ("14-22-065-16W5/2", "00/14-22-065-16W5/2"),
+    ("16-36-126-30W6", "00/16-36-126-30W6/0"),
+    ("17-22-065-16W5", None),  # LSD 17
+    ("00-22-065-16W5", None),  # LSD 0
+    ("14-37-065-16W5", None),  # section 37
+    ("14-22-127-16W5", None),  # township 127
+    ("14-22-065-31W5", None),  # range 31
+    ("14-22-065-16W7", None),  # meridian 7
+    ("14-22-065-16W3", None),  # meridian 3 is Saskatchewan/Manitoba
+    ("14-22-065-16E5", None),
+    ("14-22-065W5", None),
+    ("200/14-22-065-16W5/00", None),  # survey system 2 is BC NTS
+    ("100/14-22-065-16W5/12", None),  # no 1-digit event form
+    ("100/14-22-065-16W5/", None),
+    ("142206516W5", None),
+])
+def test_normalize_api_accepts_alberta_uwi(text, want):
+    assert idn.normalize_api(text) == want
+    assert idn.normalize_uwi(text) == want
+
+
+def test_normalize_uwi_rejects_a_us_api():
+    assert idn.normalize_uwi("05-123-45678") is None
+    assert idn.normalize_uwi(512345678) is None
+
+
 @pytest.mark.parametrize("text,want", [
     ("2019-05-04", "2019-05-04"),
     ("2019-5-4", "2019-05-04"),
@@ -288,6 +326,72 @@ def test_format_api_edit_trailing_dash_left_by_backspace_is_dropped():
 
 def test_format_api_edit_cursor_at_start():
     assert idn.format_api_edit("", "05", 0) == ("05", 0)
+
+
+_KEYSYMS = {"-": "minus", "/": "slash", " ": "space", ".": "period"}
+
+
+def _type_api(chars: str) -> str:
+    """Type `chars` one key at a time at the end of the API entry, through the mask."""
+    shown, cursor = "", 0
+    for ch in chars:
+        text = shown[:cursor] + ch + shown[cursor:]
+        shown, cursor = idn.format_api_edit(shown, text, cursor + 1, _KEYSYMS.get(ch, ch))
+    return shown
+
+
+@pytest.mark.parametrize("typed", [
+    "14-22-065-16W5",
+    "14-22-65-16w5",
+    "1-2-1-1W4",
+    "100/14-22-065-16W5/00",
+    "00/14-22-065-16W5/0",
+    "F1/06-03-071-05W6/3",
+])
+def test_format_api_edit_leaves_a_typed_uwi_alone(typed):
+    assert _type_api(typed) == typed
+
+
+@pytest.mark.parametrize("typed, shown", [
+    ("0512345678", "05-123-45678"),
+    ("05-123-45678", "05-123-45678"),
+    ("05-123-45678-00-00", "05-123-45678-00-00"),
+])
+def test_format_api_edit_still_masks_a_typed_api(typed, shown):
+    assert _type_api(typed) == shown
+
+
+def test_format_api_edit_leaves_a_pasted_uwi_alone():
+    for uwi in ("14-22-065-16W5", "100/14-22-065-16W5/00", "00/14-22-065-16W5/0"):
+        assert idn.format_api_edit("", uwi, len(uwi), key="v") == (uwi, len(uwi))
+
+
+def test_format_api_edit_backspace_in_a_uwi_is_left_alone():
+    # "14-22-|" BackSpace removes the dash the interpreter typed; the API rule would eat a digit.
+    assert idn.format_api_edit("14-22-", "14-22", 5, key="BackSpace") == ("14-22", 5)
+    assert idn.format_api_edit("14-22-0", "14-22-", 6, key="BackSpace") == ("14-22-", 6)
+
+
+def test_format_api_edit_backspace_mid_api_still_masks():
+    # "05-1|23-4" BackSpace leaves a dash after 4 digits; that is an API edit, not a UWI.
+    assert idn.format_api_edit("05-123-4", "05-23-4", 3, key="BackSpace")[0] == "05-234"
+
+
+def test_format_api_edit_api_pasted_with_a_w_word_is_masked():
+    assert idn.format_api_edit("", "05-123-45678 Weld", 17, key="v")[0] == "05-123-45678"
+
+
+def test_format_api_edit_numpad_slash_drops_the_mask_dash_in_a_prefix():
+    assert idn.format_api_edit("10-0", "10-0/", 5, key="KP_Divide") == ("100/", 4)
+
+
+def test_format_api_edit_slash_after_a_full_api_keeps_its_dashes():
+    assert idn.format_api_edit("05-123-45678", "05-123-45678/", 13, key="slash") == (
+        "05-123-45678/", 13)
+
+
+def test_format_api_edit_api_pasted_over_a_uwi_is_masked():
+    assert idn.format_api_edit("14-22-", "0512345678", 10, key="v")[0] == "05-123-45678"
 
 
 def test_nine_digits_starting_with_zero_is_incomplete_not_padded():

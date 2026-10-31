@@ -111,7 +111,8 @@ LOG_COLUMNS = [
     # compliance anchor) or "measured" (BHP throughout, no anchor); blank with no curve --
     # tail-appended per the append-only convention.
     "stiffness_pressure_basis",
-    # Test identity (spec: .scratch/log-identity-columns): api is 10-digit text, job_date ISO,
+    # Test identity (spec: .scratch/log-identity-columns): api is 10-digit text (an Alberta UWI
+    # in ST37 form, .scratch/uwi-api-field), job_date ISO,
     # both blank when invalid (model._check_identity) -- tail-appended per the append-only
     # convention.
     "api",

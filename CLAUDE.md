@@ -196,11 +196,14 @@ non-data `.xlsx` files; it never raises.
   logged as `operator_at_test`/`api`/`job_date`. The API and job date entries are masked as typed
   or pasted (`ui._EntryMask`, an idle-deferred var trace, over `identity.format_api_edit` /
   `format_job_date_edit`): API digits grouped `05-123-45678[-00-00]` (state, picks, and the log
-  keep bare digits); date digits grouped `YYYY-MM-DD`, a separator after a one-digit month/day
+  keep a US API as bare digits); an Alberta UWI (a `/`, a `W` meridian, a typed letter, or a `-`
+  where an API has none, `identity._is_uwi_edit`) is left as typed and stored in AER ST37 form
+  `00/14-22-065-16W5/0` (`identity.normalize_uwi`, spec `.scratch/uwi-api-field/spec.md`);
+  date digits grouped `YYYY-MM-DD`, a separator after a one-digit month/day
   zero-pads it, a pasted full date (`5/4/2019`) becomes ISO at once, and text with `/` typed by
   hand is left for the commit to convert. `compute_all` sets
   `res.api` (10 digits; 9 not starting with 0 are zero-padded since Excel drops the 0 of `05`,
-  12/14 truncated) and `res.job_date` (ISO); an invalid entry is a note and logs
+  12/14 truncated; or the ST37-form UWI) and `res.job_date` (ISO); an invalid entry is a note and logs
   blank, and blank fields get one `Identity blank: …` note. API is manual only. Once per load, on
   the first Overview visit (after the shut-in seed), `ui._fill_identity_blanks` fills a blank
   operator from `identity.suggest_operator` (folder path and file name, shallowest component

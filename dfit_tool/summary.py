@@ -205,7 +205,7 @@ def _inputs(state: PickState, res: DerivedResults) -> Section:
                                             state.tail_guard_override)
     rows = [
         ["operator", state.operator_at_test.strip() or DASH],
-        ["API", res.api or DASH],
+        ["API / UWI", res.api or DASH],
         ["job date", res.job_date or DASH],
         ["TVD (ft)", _fmt(finite_or_none(state.tvd_ft))],
         ["fluid density (ppg)", _fmt(finite_or_none(state.density_ppg), "{:.2f}")],

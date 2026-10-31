@@ -53,6 +53,38 @@ def test_invalid_api_and_date_are_noted_not_logged(tmp_path):
     assert row["api"] is None and row["job_date"] is None
 
 
+def test_alberta_uwi_is_normalized_and_logged(tmp_path):
+    st, td = _state(api="14-22-065-16W5", operator_at_test="GMT Exploration",
+                    job_date="2022-01-15")
+    res = compute_all(st, td)
+    assert res.api == "00/14-22-065-16W5/0"
+    assert not any("API" in n for n in res.notes)
+    assert _log_row(tmp_path, st, td)["api"] == "00/14-22-065-16W5/0"
+
+
+def test_invalid_uwi_is_noted_not_logged(tmp_path):
+    st, td = _state(api="14-37-065-16W5", operator_at_test="X", job_date="2022-01-15")
+    res = compute_all(st, td)
+    assert res.api is None
+    assert "API '14-37-065-16W5' is not a 10-digit API or an Alberta UWI; not logged" in res.notes
+    assert _log_row(tmp_path, st, td)["api"] is None
+
+
+def test_uwi_round_trips_through_log_file(tmp_path):
+    st, td = _state(api="00/14-22-065-16W5/0", job_date="2022-01-15")
+    path = str(tmp_path / "dfit_log.csv")
+    log = store.upsert_log_row(store.load_log_file(path), _log_row(tmp_path, st, td))
+    store.save_log_file(path, log)
+    assert store.load_log_file(path).loc[0, "api"] == "00/14-22-065-16W5/0"
+
+
+def test_uwi_shows_in_expanded_results():
+    st, td = _state(api="00/14-22-065-16W5/0", job_date="2022-01-15")
+    res = compute_all(st, td)
+    rows = [row for sec in summary.summary_sections(st, res) for row in sec.rows]
+    assert ["API / UWI", "00/14-22-065-16W5/0"] in rows
+
+
 def test_blank_identity_gives_one_note():
     st, td = _state()
     res = compute_all(st, td)
@@ -90,7 +122,7 @@ def test_inputs_section_lists_identity_first():
     st, td = _state(api="0512345678", operator_at_test="PDC", job_date="2019-05-04")
     res = compute_all(st, td)
     sec = next(s for s in summary.summary_sections(st, res) if s.title == "Inputs and data")
-    assert sec.rows[:3] == [["operator", "PDC"], ["API", "0512345678"],
+    assert sec.rows[:3] == [["operator", "PDC"], ["API / UWI", "0512345678"],
                             ["job date", "2019-05-04"]]
 
 

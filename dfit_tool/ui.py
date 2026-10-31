@@ -417,11 +417,12 @@ class DfitApp:
         self.cmb_operator.bind("<<ComboboxSelected>>", lambda e: self._commit_identity())
         self.cmb_operator.bind("<FocusOut>", lambda e: self._commit_identity())
         # API and job date entries are masked: dashes go in as digits are typed or pasted
-        # (_EntryMask). The stored API stays 10 bare digits (_canonical_identity). The date format
+        # (_EntryMask). The stored API stays 10 bare digits (_canonical_identity); an Alberta UWI
+        # is left as typed and stored in ST37 form, 00/14-22-065-16W5/0. The date format
         # is also in its label (ttk.Entry has no placeholder text); M/D/YYYY typed with slashes is
         # left alone and rewritten to ISO on commit.
-        ttk.Label(meta, text="API:").pack(side="left", padx=(8, 2))
-        self.ent_api = ttk.Entry(meta, textvariable=self.var_api, width=18)
+        ttk.Label(meta, text="API / UWI:").pack(side="left", padx=(8, 2))
+        self.ent_api = ttk.Entry(meta, textvariable=self.var_api, width=22)
         self.ent_api.pack(side="left")
         self.ent_api.bind("<FocusOut>", lambda e: self._commit_identity())
         ttk.Label(meta, text="Job date (YYYY-MM-DD):").pack(side="left", padx=(8, 2))
@@ -3259,8 +3260,8 @@ class _EntryMask:
 def _canonical_identity(operator: str, api: str, job_date: str,
                         known: list[str]) -> tuple[str, str, str]:
     """(operator, api, job_date) as stored: the operator snapped to the known list's spelling,
-    a valid API as 10 digits and a valid date as ISO. Invalid text is kept as typed so
-    compute_all can note it (it logs blank)."""
+    a valid API as 10 digits (a UWI in ST37 form) and a valid date as ISO. Invalid text is kept
+    as typed so compute_all can note it (it logs blank)."""
     api, job_date = (api or "").strip(), (job_date or "").strip()
     return (identity.canonical_operator(operator or "", known),
             identity.normalize_api(api) or api,

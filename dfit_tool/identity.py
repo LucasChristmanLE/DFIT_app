@@ -1,4 +1,4 @@
-"""Pure helpers for a test's identity: operator at test, API number, and job date.
+"""Pure helpers for a test's identity: operator at test, API number (or Alberta UWI), and job date.
 
 Stdlib only, no ``dfit_tool`` imports, no Tkinter. ``model.compute_all`` calls the API and date
 helpers to validate what was recorded; ``ui`` calls the operator helpers for suggestions and the
@@ -198,9 +198,42 @@ def suggest_operator(path: str, known: Iterable[str],
 
 
 def normalize_api(text: object) -> Optional[str]:
-    """10-digit API number, or None. Accepts dashes/spaces/dots, 9 digits not starting with 0
-    (Excel dropped the leading 0; a 9-digit "05..." is unfinished), and 12 or 14 digits
-    (well-bore and event suffixes are cut)."""
+    """10-digit US API number, else an Alberta UWI in ST37 form (`normalize_uwi`), else None.
+
+    API: accepts dashes/spaces/dots, 9 digits not starting with 0 (Excel dropped the leading 0;
+    a 9-digit "05..." is unfinished), and 12 or 14 digits (well-bore and event suffixes are
+    cut)."""
+    return _normalize_us_api(text) or normalize_uwi(text)
+
+
+# Dominion Land Survey UWI, whitespace removed and uppercased: an optional prefix (the 16-
+# character form's survey-system "1" plus the 2-character location exception), LSD-section-
+# township-range, W + meridian, an optional event sequence.
+_UWI_RE = re.compile(r"^(?:1?(?P<le>[0-9A-Z]{2})/)?(?P<lsd>\d{1,2})-(?P<sec>\d{1,2})-"
+                     r"(?P<twp>\d{1,3})-(?P<rge>\d{1,2})W(?P<mer>\d)(?:/0?(?P<ev>\d))?$")
+_UWI_RANGES = {"lsd": (1, 16), "sec": (1, 36), "twp": (1, 126), "rge": (1, 30), "mer": (4, 6)}
+
+
+def normalize_uwi(text: object) -> Optional[str]:
+    """Alberta UWI in AER ST37 `Well_UWI` form, `00/14-22-065-16W5/0`, or None.
+
+    Accepts the 16-character form (`100/14-22-065-16W5/00`), the short form with no location
+    exception or event (`14-22-065-16W5`, which gets `00/` and `/0`), unpadded parts, any
+    whitespace, and a lowercase `w`. A part out of range (LSD 1-16, section 1-36, township 1-126,
+    range 1-30, meridian W4-W6) is invalid, as is a 2-digit event not starting with 0."""
+    if not isinstance(text, str):
+        return None
+    m = _UWI_RE.match(re.sub(r"\s+", "", text).upper())
+    if m is None:
+        return None
+    n = {k: int(m[k]) for k in _UWI_RANGES}
+    if any(not lo <= n[k] <= hi for k, (lo, hi) in _UWI_RANGES.items()):
+        return None
+    return (f"{m['le'] or '00'}/{n['lsd']:02d}-{n['sec']:02d}-{n['twp']:03d}-{n['rge']:02d}"
+            f"W{n['mer']}/{m['ev'] or '0'}")
+
+
+def _normalize_us_api(text: object) -> Optional[str]:
     if text is None:
         return None
     if isinstance(text, float):
@@ -282,8 +315,37 @@ def format_api_edit(prev: str, text: str, cursor: int,
                     key: Optional[str] = None) -> tuple[str, int]:
     """Reformat the API entry after an edit: `prev` is the formatted text before it, `text` and
     `cursor` the entry after it, `key` the keysym that made it (if any). Returns the new text and
-    cursor index (see `_mask_edit`)."""
+    cursor index (see `_mask_edit`). A UWI being typed or pasted (`_is_uwi_edit`) is left as
+    typed; the commit normalizes it."""
+    if _is_uwi_edit(prev, text, cursor, key):
+        head = text[:cursor]
+        if (head.endswith("/") and len(text) == len(prev) + 1 and prev == format_api(prev)
+                and len(_digits(head)) <= 3):
+            # "100" was masked "10-0" before the "/" showed it was a UWI prefix.
+            head = head.replace("-", "")
+            return head + text[cursor:], len(head)
+        return text, cursor
     return _mask_edit(prev, text, cursor, key, _API_GROUPS)
+
+
+# Digit counts an API dash follows (the boundaries of _API_GROUPS).
+_API_DASH_AT = frozenset(sum(_API_GROUPS[:i]) for i in range(1, len(_API_GROUPS)))
+
+
+def _is_uwi_edit(prev: str, text: str, cursor: int, key: Optional[str]) -> bool:
+    """Whether the API entry holds a UWI in progress: a `/` or a meridian (`16W5`); a letter or a
+    `-` typed where an API has no dash (`14-22-`, `1-`); or an edit to text already left as
+    typed that still has a separator or letter. A pasted "API: 05 123 45678" or
+    "05-123-45678 Weld" stays an API."""
+    if "/" in text or re.search(r"\d\s*[Ww]\s*\d", text):
+        return True
+    inserted = len(text) == len(prev) + 1 and 0 < cursor <= len(text)
+    if inserted and text[cursor - 1].isalpha():
+        return True
+    if (key == "minus" and inserted and text[cursor - 1] == "-"
+            and len(_digits(text[:cursor])) not in _API_DASH_AT):
+        return True
+    return prev != format_api(prev) and bool(re.search(r"[-A-Za-z]", text))
 
 
 def format_job_date(text: object) -> str:

@@ -22,6 +22,10 @@ _Avoid_: Stress method, interpretation (when meaning the method)
 
 ### Test identity
 
+**API / UWI**:
+The well's regulatory identifier, logged in the `api` column. A US well has a 10-digit API number (`0512345678`, state prefix first). An Alberta well has no API; it has a Dominion Land Survey UWI, stored in AER ST37 `Well_UWI` form (`00/14-22-065-16W5/0`). The two are told apart by form: all digits is an API, a `W` meridian is a UWI.
+_Avoid_: API (when the well is in Alberta), well ID
+
 **Job date**:
 The date the DFIT was pumped. One per test.
 _Avoid_: Test date, review date (that is when the test was interpreted)

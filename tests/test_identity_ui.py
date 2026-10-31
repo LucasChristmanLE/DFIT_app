@@ -85,6 +85,16 @@ def test_commit_keeps_invalid_text_for_the_note():
     assert app.state.job_date == "someday"
 
 
+def test_commit_stores_an_alberta_uwi_in_st37_form():
+    app = _app(PickState())
+    app.var_api.set(" 14-22-65-16w5 ")
+    app._commit_identity()
+    assert app.var_api.get() == "00/14-22-065-16W5/0"
+    assert app.state.api == "00/14-22-065-16W5/0"
+    assert ui._canonical_identity("", "100/14-22-065-16W5/00", "", [])[1] == (
+        "00/14-22-065-16W5/0")
+
+
 def test_fill_runs_once_per_load():
     # A cleared suggestion stays cleared on the next Overview visit, and no line repeats.
     app = _app(PickState(shutin_idx=0))
@@ -185,6 +195,21 @@ def test_api_entry_paste_with_label():
 def test_api_entry_backspace_over_dash():
     m = _mask(identity.format_api_edit, "05-123", "05123", 2, key="BackSpace")
     assert (m.var.get(), m.entry.cursor) == ("01-23", 1)
+
+
+def test_api_entry_leaves_a_typed_uwi_alone():
+    m = _mask(identity.format_api_edit, "14-22", "14-22-", 6, key="minus")
+    assert (m.var.get(), m.entry.cursor) == ("14-22-", 6)
+    m = _mask(identity.format_api_edit, "14-22-065-16", "14-22-065-16W", 13, key="W")
+    assert (m.var.get(), m.entry.cursor) == ("14-22-065-16W", 13)
+    # "100" was masked "10-0"; the "/" shows it was a UWI prefix, so the mask's dash goes.
+    m = _mask(identity.format_api_edit, "10-0", "10-0/", 5, key="slash")
+    assert (m.var.get(), m.entry.cursor) == ("100/", 4)
+
+
+def test_api_entry_paste_uwi():
+    m = _mask(identity.format_api_edit, "", "100/14-22-065-16W5/00", 21, key="v")
+    assert (m.var.get(), m.entry.cursor) == ("100/14-22-065-16W5/00", 21)
 
 
 def test_job_date_entry_masks_and_converts_a_paste():
